@@ -1,0 +1,42 @@
+# systemd unit for the Prometheus v1 governor on the Chief Scientist's workstation.
+#
+# Install:
+#   sudo useradd --system --create-home --home-dir /var/lib/prometheus-governor governor
+#   sudo -u governor python3 -m venv /var/lib/prometheus-governor/venv
+#   sudo -u governor /var/lib/prometheus-governor/venv/bin/pip install /path/to/prometheus-v1
+#   sudo cp deploy/prometheus-governor.service /etc/systemd/system/
+#   sudo systemctl edit prometheus-governor   # set RUN_EXCHANGE and the passphrase credential
+#   sudo systemctl enable --now prometheus-governor
+#
+# The exchange folder is the rclone-synced Google Drive folder for the run
+# (see deploy/rclone-sync.sh). The key passphrase is supplied as a systemd
+# credential so it never appears in the unit file or the process environment
+# of other users.
+
+[Unit]
+Description=Prometheus v1 Internal Alignment Governor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=governor
+Group=governor
+Environment=GOVERNOR_HOME=/var/lib/prometheus-governor/home
+Environment=RUN_EXCHANGE=/var/lib/prometheus-governor/drive/run-001
+LoadCredentialEncrypted=governor-passphrase:/etc/credstore.encrypted/governor-passphrase
+ExecStart=/bin/sh -c 'PROMETHEUS_GOVERNOR_PASSPHRASE="$(cat "$CREDENTIALS_DIRECTORY/governor-passphrase")" exec /var/lib/prometheus-governor/venv/bin/prometheus-governor run --home "$GOVERNOR_HOME" --exchange "$RUN_EXCHANGE"'
+Restart=on-failure
+RestartSec=30
+
+# Hardening: the governor needs only its home and the exchange folder.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/prometheus-governor
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

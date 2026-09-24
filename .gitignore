@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+# never commit governor secrets or run state
+governor_key.pem
+*.pem
+state.json

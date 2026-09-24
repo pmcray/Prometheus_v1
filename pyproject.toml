@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prometheus-v1"
+version = "0.1.0"
+description = "Prometheus v1: a small, inspectable demonstrator of I.J. Good's ultraintelligence principles"
+requires-python = ">=3.10"
+dependencies = [
+    "cryptography>=42",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+prometheus-governor = "prometheus.governor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
