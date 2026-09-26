@@ -101,6 +101,11 @@ class Governor:
             proxy_score=bundle.manifest.get("proxy_score"),
         )
         self._save_state()
+        # Write baseline_hash.txt to the exchange so the Colab runtime can
+        # initialise the Gate without hard-coding the hash.
+        bh_path = self.exchange / "baseline_hash.txt"
+        bh_path.parent.mkdir(parents=True, exist_ok=True)
+        bh_path.write_text(bundle.variant_hash + "\n", encoding="utf-8")
         self.log.append("init_run", {"run_id": self.policy.run_id,
                                      "variant_hash": bundle.variant_hash, "audit_score": score})
         return self.state
