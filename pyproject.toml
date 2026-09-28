@@ -13,6 +13,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# Runtime extras (installed on Colab, not needed on the workstation)
+colab = [
+    "openai>=1.0",
+    "mlflow>=2.0",
+    "vllm",
+]
 
 [project.scripts]
 prometheus-governor = "prometheus.governor.cli:main"
