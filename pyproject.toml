@@ -22,6 +22,8 @@ colab = [
 
 [project.scripts]
 prometheus-governor = "prometheus.governor.cli:main"
+prometheus-observatory = "prometheus.observatory.cli:main"
+prometheus-verify-worlds = "prometheus.lab.lean_layer:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

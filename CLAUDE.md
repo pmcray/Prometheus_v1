@@ -46,29 +46,39 @@ says otherwise.
 ## Commands
 ```bash
 python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
-pytest -q                     # 53 tests at the start of this handover
-pytest -q -k redteam          # the governor's red-team set (34 cases)
+pytest -q                     # 196 tests (including live Lean 4 compilation)
+pytest -q -k redteam          # governor, gate, sandbox & prover red-team set (88 cases)
 prometheus-governor --help
+prometheus-observatory --help
+prometheus-verify-worlds --help
 ```
 
 ## Where things stand (Phase 0, which runs to 27 Nov 2026)
-Done: audit log, variant bundles, governor (keys, signed approvals/heartbeats, rules,
-audit scoring, kill switch, CLI), Colab-side gate, Hidden-Law Lab v0, systemd unit and
-rclone script (both written, neither installed yet).
+Done (code, tests, and local workstation deployment):
+- Audit log, variant bundles, governor (keys, signed approvals/heartbeats, file locking,
+  rules, audit scoring, proxy-gain check, kill switch, CLI), and Colab-side gate with
+  persistent Drive state.
+- Workstation deployment: `governor` user, `prometheus-governor.service` (active, network
+  denied), `rclone-sync.timer` / `rclone-sync.service` syncing with Google Drive.
+  Confirm with Paul before any `sudo` step when updating deployed units/venv.
+- Hidden-Law Lab v0 + Lean 4 ground-truth statement & `decide` proof layer (`v4.34.1`
+  pinned in `lean/PrometheusLaws/`, 1,000 worlds verified in `lean/verified_1000_worlds.json`).
+- Hardened subprocess sandbox (`python -I`, AST screen, import allowlist, audit hook,
+  rlimits, dedicated result pipe).
+- Resumable Colab runtime + bake-off notebook (`colab/prometheus_runtime.ipynb`),
+  cortex & Lean 4 prover harnesses (`src/prometheus/harness/`), and MLflow bake-off runner.
+- Local read-only Observatory dashboard (`src/prometheus/observatory/`).
+- Local Phase 0 end-to-end test (`tests/test_phase0_e2e.py`).
 
-Next, in order:
-1. Install and run the governor on this laptop: dedicated `governor` user, venv,
-   keygen, systemd unit with an encrypted passphrase credential, rclone remote to Google
-   Drive, rclone sync on a systemd timer. Confirm with Paul before any `sudo` step.
-2. Lean layer: generate a Lean 4.9 statement for each law in each world (finite types,
-   provable with `decide`), check ground truth compiles, and pin the Mathlib version.
-   There is an existing `~/.elan` toolchain on this machine.
-3. Colab runtime template: notebook that mounts Drive, loads the gate with the public
-   key, checkpoints every episode, and survives a forced restart.
-4. Sandbox for agent-written code on Colab (unprivileged user, no network, CPU/time
-   limits); confirm what Colab actually permits.
-5. Foundation-model bake-off on 200 Hidden-Law Lab tasks (Colab GPU).
-6. Observatory dashboard reading the Drive logs on this laptop.
+Remaining for Phase 0 exit:
+1. Run `colab/prometheus_runtime.ipynb` on a Colab GPU: live Drive approval/heartbeat
+   round trip, forced runtime restart confirmation, and 200-episode foundation-model
+   cortex bake-off (`qwen3-8b`, `gpt-oss-20b`, `gemma4-4b`).
+2. Prover bake-off (step 5b) and Lean toolchain alignment (pin Lean 4.9 if selecting
+   `Goedel-Prover-V2-8B`), then pin winning Hugging Face commit hashes in
+   `src/prometheus/bakeoff/models.py` and the workstation `policy.json`.
+
+Next after Phase 0: Phase 1+ cognitive core (Friston EFE, Good MDL/memory, Hofstadter transfer).
 
 Phase 0 exit criteria: governor running here blocks 100% of the starter red-team set;
 Drive approval/heartbeat round trip works and stopping the governor halts a live run;

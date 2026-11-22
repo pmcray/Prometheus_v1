@@ -15,7 +15,13 @@ import shutil
 
 import pytest
 
-from prometheus.lab import HiddenLawWorld, world_lean_source, verify_lean_source
+from prometheus.lab import (
+    HiddenLawWorld,
+    batch_lean_source,
+    verify_lean_source,
+    verify_world_batch,
+    world_lean_source,
+)
 from prometheus.lab.lean_layer import _lean_bin, _lean_project_dir, verify_world
 
 
@@ -173,3 +179,14 @@ def test_lean_toolchain_is_v4_34():
         capture_output=True, text=True, timeout=15, cwd=project_dir,
     )
     assert expected_minor in result.stdout, f"unexpected version: {result.stdout.strip()} (pinned {pinned})"
+
+
+@lean
+@slow
+def test_verify_world_batch_compiles_multiple_worlds():
+    """Batched namespace compilation verifies multiple worlds in one Lean call."""
+    res = verify_world_batch(range(10), chunk_size=5, workers=2, timeout=60)
+    assert res.ok, res.failed_seeds
+    assert res.verified_worlds == 10
+    assert res.total_theorems >= 80
+    assert len(res.digest_sha256) == 64

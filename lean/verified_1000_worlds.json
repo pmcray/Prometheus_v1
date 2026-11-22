@@ -1,0 +1,21 @@
+{
+  "digest_sha256": "ce3d5d85a44e39ddde4e305874cf56708b38323c3bf8e3bcedf48cb64688b12c",
+  "elapsed_s": 283.63,
+  "failed_seeds": {},
+  "family_counts": {
+    "cyclic": 126,
+    "klein4": 121,
+    "left_zero": 125,
+    "max_semilattice": 157,
+    "mult_mod": 126,
+    "random_magma": 113,
+    "rock_paper_scissors": 130,
+    "symmetric3": 102
+  },
+  "lean_version": "Lean (version 4.34.1, x86_64-unknown-linux-gnu, commit 5045d0056413266e57c625dcd7c365b10e377c52, Release)",
+  "ok": true,
+  "seeds": "0-999",
+  "total_theorems": 8801,
+  "total_worlds": 1000,
+  "verified_worlds": 1000
+}

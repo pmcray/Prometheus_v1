@@ -435,3 +435,61 @@ def test_bakeoff_summary_to_dict():
     assert "accuracy" in d
     assert "per_law_accuracy" in d
     assert "per_family_accuracy" in d
+
+
+# ---------------------------------------------------------------------------
+# Prover harness & cheat-detection tests (Phase 0 step 5b)
+# ---------------------------------------------------------------------------
+
+def test_prover_validate_accepts_ground_truth_proof():
+    from prometheus.harness.prover import validate_prover_source
+    from prometheus.lab.lean_layer import world_lean_source
+
+    w = HiddenLawWorld(seed=7)
+    template = world_lean_source(w, include_proofs=False)
+    proof = world_lean_source(w, include_proofs=True)
+    assert validate_prover_source(template, proof) is None
+
+
+@pytest.mark.parametrize("bad_tactic", ["sorry", "admit", "native_decide"])
+def test_redteam_prover_rejects_cheat_primitives(bad_tactic):
+    from prometheus.harness.prover import validate_prover_source
+    from prometheus.lab.lean_layer import world_lean_source
+
+    w = HiddenLawWorld(seed=7)
+    template = world_lean_source(w, include_proofs=False)
+    cheated = world_lean_source(w, include_proofs=True).replace("by decide", f"by {bad_tactic}", 1)
+    err = validate_prover_source(template, cheated)
+    assert err is not None and bad_tactic in err
+
+
+def test_redteam_prover_rejects_altered_theorem_or_world_table():
+    from prometheus.harness.prover import validate_prover_source
+    from prometheus.lab.lean_layer import world_lean_source
+
+    w = HiddenLawWorld(seed=7)
+    template = world_lean_source(w, include_proofs=False)
+    valid = world_lean_source(w, include_proofs=True)
+
+    # Weakening a theorem statement
+    weakened = valid.replace("theorem ", "theorem fake_", 1)
+    assert validate_prover_source(template, weakened) is not None
+
+    # Tampering with opTable
+    tampered_table = valid.replace("def op (a b : Fin N) : Fin N := (opTable[a]!)[b]!",
+                                   "def op (a b : Fin N) : Fin N := a")
+    assert validate_prover_source(template, tampered_table) is not None
+
+
+def test_run_prover_episode_rejects_cheat_without_calling_lean():
+    from prometheus.harness.prover import run_prover_episode
+    from prometheus.lab.lean_layer import world_lean_source
+
+    w = HiddenLawWorld(seed=7)
+    template = world_lean_source(w, include_proofs=False)
+    fake_client = mock.MagicMock(spec=ModelClient)
+    fake_client.chat.return_value = f"```lean\n{template}\n```"  # still contains sorry
+    res = run_prover_episode(w, fake_client)
+    assert res.proved is False
+    assert res.error is not None and "sorry" in res.error
+
