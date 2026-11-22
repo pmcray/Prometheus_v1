@@ -16,7 +16,9 @@ LOCAL="${LOCAL:-/var/lib/prometheus-governor/drive/${RUN_ID}}"
 mkdir -p "${LOCAL}/proposals" "${LOCAL}/approvals" "${LOCAL}/logs"
 
 # Ensure remote subdirectories exist so initial copy never aborts under set -e.
-rclone mkdir "${REMOTE}/proposals" "${REMOTE}/approvals" "${REMOTE}/logs"
+for sub in proposals approvals logs; do
+    rclone mkdir "${REMOTE}/${sub}"
+done
 
 # Pull Colab outputs -> workstation
 rclone copy "${REMOTE}/proposals" "${LOCAL}/proposals" --checksum
