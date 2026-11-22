@@ -42,6 +42,11 @@ You have access to two operations on a set of opaque symbols:
   • transform(a)  → symbol   (a unary map, written f(a))
 
 You will be shown the results of several experiments on the structure.
+IMPORTANT: observations are noisy — a small fraction of experiment results may
+be randomly corrupted to another symbol. Look for global consistency across
+observations (and majority values when an experiment is repeated) rather than
+letting a single isolated outlier falsify a law that holds everywhere else.
+
 Your task is to decide which of the following eight laws hold:
 
   1. commutative   – a ⋆ b = b ⋆ a  for all a, b
@@ -78,6 +83,8 @@ def build_messages(
     symbols: list[str],
     observations: list[dict[str, Any]],
     budget_remaining: float,
+    *,
+    noise: float | None = None,
 ) -> list[dict[str, str]]:
     """Build the OpenAI message list for one decision step.
 
@@ -88,6 +95,7 @@ def build_messages(
                           ``args`` (tuple of symbol names) and ``result``
                           (symbol name).
         budget_remaining: Remaining budget (informational for the model).
+        noise:            Optional observation noise rate in [0, 1).
 
     Returns:
         An OpenAI message list: ``[{"role": "system", ...}, {"role": "user", ...}]``.
@@ -98,6 +106,10 @@ def build_messages(
     lines = [
         f"The symbol set has {n} elements: {{{sym_list}}}.",
         f"Budget remaining: {budget_remaining:.1f} units.",
+    ]
+    if noise is not None:
+        lines.append(f"Observation noise rate: {noise * 100:.1f}% per query.")
+    lines += [
         "",
         f"Experiment transcript ({len(observations)} observations):",
     ]
@@ -125,6 +137,20 @@ def build_messages(
     ]
 
 
+def _parse_bool(value: Any, law_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        low = value.strip().lower()
+        if low == "true":
+            return True
+        if low == "false":
+            return False
+    raise ValueError(f"Invalid boolean claim for {law_name!r}: {value!r}")
+
+
 def parse_claims(raw: Any) -> dict[str, bool]:
     """Extract and validate the ``claims`` dict from a parsed model response.
 
@@ -135,7 +161,8 @@ def parse_claims(raw: Any) -> dict[str, bool]:
         A ``{law_name: bool}`` dict for all eight laws.
 
     Raises:
-        ValueError: If the response is malformed or missing required keys.
+        ValueError: If the response is malformed, missing required keys, or
+                    contains non-boolean values.
     """
     if not isinstance(raw, dict):
         raise ValueError(f"Expected a JSON object, got {type(raw).__name__}")
@@ -149,7 +176,7 @@ def parse_claims(raw: Any) -> dict[str, bool]:
         if name not in claims_raw:
             missing.append(name)
         else:
-            claims[name] = bool(claims_raw[name])
+            claims[name] = _parse_bool(claims_raw[name], name)
 
     if missing:
         raise ValueError(f"Model omitted claims for: {', '.join(missing)}")

@@ -3,11 +3,15 @@
 Each run:
   1. Creates (or resumes from) a JSON checkpoint on Drive.
   2. Runs up to ``config.n_episodes`` Hidden-Law Lab episodes.
-  3. Logs every episode result to an MLflow file-store experiment.
+  3. Logs every episode result to an MLflow SQLite experiment.
   4. At the end, logs aggregate metrics and a per-family accuracy table.
 
 MLflow is a runtime dependency (installed on Colab); it is imported lazily
 so the module can be imported and tested without it.
+
+MLflow tracking URI must be a SQLite URI, e.g.
+``sqlite:////content/drive/MyDrive/prometheus/mlflow.db``.
+The old file-store backend (``mlruns/``) was deprecated in MLflow 3.x.
 
 Checkpoint format::
 
@@ -22,6 +26,8 @@ Checkpoint format::
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -61,7 +67,7 @@ class BakeoffConfig:
 
     model_name: str                    # key in MODEL_REGISTRY
     n_episodes: int = 200
-    seeds: list[int] = field(default_factory=lambda: list(range(200)))
+    seeds: list[int] | None = None
     noise: float = 0.05
     budget: float = 500.0
     max_obs_per_episode: int = 200
@@ -69,11 +75,19 @@ class BakeoffConfig:
     vllm_base_url: str = "http://localhost:8000/v1"
     temperature: float = 0.0
     max_tokens: int = 2048
-    # MLflow
-    mlflow_tracking_uri: str = "mlruns"   # file-store path
+    # MLflow — must be a SQLite URI; file-store was deprecated in MLflow 3.x
+    mlflow_tracking_uri: str = "sqlite:///mlflow.db"
     mlflow_experiment: str = "phase0-bakeoff"
     # Checkpoint path (Drive path on Colab)
     checkpoint_path: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.seeds is None:
+            self.seeds = list(range(self.n_episodes))
+        elif len(self.seeds) < self.n_episodes:
+            raise ValueError(
+                f"seeds length ({len(self.seeds)}) is smaller than n_episodes ({self.n_episodes})"
+            )
 
     def model_spec(self) -> ModelSpec:
         if self.model_name not in MODEL_REGISTRY:
@@ -205,16 +219,24 @@ class BakeoffRunner:
             "t4_feasible": str(self.spec.t4_feasible),
         }
 
-        with mlflow.start_run(run_name=cfg.model_name, tags=run_tags):
-            mlflow.log_params({
-                "model_name": cfg.model_name,
-                "hf_id": self.spec.hf_id,
-                "n_episodes": cfg.n_episodes,
-                "noise": cfg.noise,
-                "budget": cfg.budget,
-                "temperature": cfg.temperature,
-            })
+        run_kwargs: dict[str, Any] = {"run_name": cfg.model_name, "tags": run_tags}
+        resumed_run_id = state.get("mlflow_run_id")
+        if resumed_run_id:
+            run_kwargs = {"run_id": resumed_run_id}
 
+        with mlflow.start_run(**run_kwargs) as active_run:
+            if not resumed_run_id:
+                state["mlflow_run_id"] = getattr(getattr(active_run, "info", None), "run_id", None)
+                mlflow.log_params({
+                    "model_name": cfg.model_name,
+                    "hf_id": self.spec.hf_id,
+                    "n_episodes": cfg.n_episodes,
+                    "noise": cfg.noise,
+                    "budget": cfg.budget,
+                    "temperature": cfg.temperature,
+                })
+
+            assert cfg.seeds is not None
             for episode_idx in range(state["next_episode"], cfg.n_episodes):
                 seed = cfg.seeds[episode_idx]
                 world = HiddenLawWorld(seed=seed, noise=cfg.noise, budget=cfg.budget)
@@ -262,22 +284,14 @@ class BakeoffRunner:
                    for k, v in summary.per_family_accuracy.items()},
             })
 
-            # Persist full results as an artifact
-            artifact_path = "results.json"
+            # Persist full results as an artifact named results.json
             results_json = json.dumps(
                 [r.to_dict() for r in all_results], indent=2, sort_keys=True
             )
-            # Write to a temp file so mlflow can log it
-            import tempfile, os
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".json", delete=False
-            ) as tmp:
-                tmp.write(results_json)
-                tmp_name = tmp.name
-            try:
-                mlflow.log_artifact(tmp_name, artifact_path="")
-            finally:
-                os.unlink(tmp_name)
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                out_path = Path(tmp_dir) / "results.json"
+                out_path.write_text(results_json, encoding="utf-8")
+                mlflow.log_artifact(str(out_path))
 
         return summary
 
@@ -309,9 +323,12 @@ def _summarise(model_name: str, results: list[EpisodeResult]) -> BakeoffSummary:
 
     for r in results:
         for name in LAW_NAMES:
-            claimed = r.claims.get(name)
-            truth = r.truth.get(name)
-            per_law[name].append(claimed == truth)
+            if r.error is not None:
+                per_law[name].append(False)
+            else:
+                claimed = r.claims.get(name)
+                truth = r.truth.get(name)
+                per_law[name].append(claimed == truth)
         per_family.setdefault(r.family, []).append(r.accuracy)
         latencies.append(r.latency_s)
 

@@ -13,6 +13,7 @@ Usage::
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 # openai is a runtime dependency installed on Colab; import lazily so tests
@@ -73,14 +74,17 @@ class ModelClient:
         self.timeout = timeout
         self.extra_body = extra_body or {}
         self._api_key = api_key
+        self._cached_client: Any = None
 
     def _client(self):
-        openai = _openai()
-        return openai.OpenAI(
-            base_url=self.base_url,
-            api_key=self._api_key,
-            timeout=self.timeout,
-        )
+        if self._cached_client is None:
+            openai = _openai()
+            self._cached_client = openai.OpenAI(
+                base_url=self.base_url,
+                api_key=self._api_key,
+                timeout=self.timeout,
+            )
+        return self._cached_client
 
     def chat(self, messages: list[dict[str, str]], **kwargs: Any) -> str:
         """Send *messages* to the model and return the assistant reply text.
@@ -124,25 +128,31 @@ class ModelClient:
     def chat_json(self, messages: list[dict[str, str]], **kwargs: Any) -> Any:
         """Like :meth:`chat` but parse the reply as JSON.
 
-        Strips markdown code fences (```json … ```) before parsing.
+        Strips ``<think>…</think>`` blocks and markdown code fences before parsing.
 
         Raises:
             ModelClientError: If the reply is not valid JSON.
         """
         raw = self.chat(messages, **kwargs)
-        text = raw.strip()
+        text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
         # Strip optional markdown code block
         if text.startswith("```"):
             lines = text.splitlines()
-            # drop first line (```json or ```) and last (```)
             inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
             text = "\n".join(inner).strip()
         try:
             return json.loads(text)
-        except json.JSONDecodeError as exc:
+        except json.JSONDecodeError:
+            # Fallback: extract first top-level JSON object if surrounded by prose
+            start, end = text.find("{"), text.rfind("}")
+            if start != -1 and end > start:
+                try:
+                    return json.loads(text[start:end + 1])
+                except json.JSONDecodeError:
+                    pass
             raise ModelClientError(
-                f"Model reply is not valid JSON: {exc}\n--- raw reply ---\n{raw[:500]}"
-            ) from exc
+                f"Model reply is not valid JSON\n--- raw reply ---\n{raw[:500]}"
+            )
 
     def health_check(self) -> bool:
         """Return True if the server responds to a trivial request."""

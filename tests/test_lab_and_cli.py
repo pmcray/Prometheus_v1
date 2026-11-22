@@ -57,6 +57,26 @@ def test_budget_enforced():
         w.combine(s[1], s[1])
 
 
+def test_invalid_symbol_does_not_consume_budget():
+    w = HiddenLawWorld(seed=1, budget=10.0)
+    with pytest.raises(KeyError):
+        w.combine("nonexistent", w.symbols[0])
+    with pytest.raises(KeyError):
+        w.transform("nonexistent")
+    assert w.spent == 0.0
+
+
+def test_family_sampling_is_unbiased():
+    """Group and non-group families should be sampled uniformly (no f_inverse rejection bias)."""
+    from collections import Counter
+
+    counts = Counter(HiddenLawWorld(seed=s).family for s in range(1600))
+    assert len(counts) == 8
+    # Expected 200 per family (std ~13.2); all counts should stay comfortably near 200.
+    for fam, count in counts.items():
+        assert 150 <= count <= 250, f"family {fam!r} skewed: {count}/1600 ({dict(counts)})"
+
+
 def test_law_shift_changes_structure_keeps_symbols():
     w = HiddenLawWorld(seed=11)
     before_syms, before_family = list(w.symbols), w.family

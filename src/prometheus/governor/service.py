@@ -14,12 +14,15 @@ and keeps its own private home, which never leaves the workstation:
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
+import math
 import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -63,12 +66,40 @@ class Governor:
         self.policy = Policy.load(self.home / "policy.json")
         self.log = EventLog(self.home / "decisions.jsonl", clock=clock)
         self.state = self._load_state()
+        self._lock_depth = 0
 
-    # ----- state -------------------------------------------------------------
+    # ----- locking & state ---------------------------------------------------
 
     @property
     def _state_path(self) -> Path:
         return self.home / "state.json"
+
+    @property
+    def _lock_path(self) -> Path:
+        return self.home / ".governor.lock"
+
+    @contextlib.contextmanager
+    def _locked(self) -> Iterator[None]:
+        """Serialize multi-process mutations (e.g. `run` daemon + `kill` CLI)
+        and reload state + log tail from disk before modifying anything."""
+        if self._lock_depth > 0:
+            self._lock_depth += 1
+            try:
+                yield
+            finally:
+                self._lock_depth -= 1
+            return
+        self.home.mkdir(parents=True, exist_ok=True)
+        with open(self._lock_path, "a+", encoding="utf-8") as lock_fh:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+            self._lock_depth = 1
+            try:
+                self.state = self._load_state()
+                self.log.sync()
+                yield
+            finally:
+                self._lock_depth = 0
+                fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
 
     def _load_state(self) -> GovernorState | None:
         if not self._state_path.exists():
@@ -87,47 +118,56 @@ class Governor:
 
     def init_run(self, baseline_dir: Path) -> GovernorState:
         """Register the human-authored generation-0 harness and its audit claims."""
-        if self.state is not None:
-            raise RuntimeError("run already initialised")
-        bundle = load_bundle(baseline_dir)
-        reasons = check_variant(bundle, self.policy, expected_generation=0,
-                                expected_parent=GENESIS_PARENT)
-        claims = _read_claims(Path(baseline_dir))
-        score = score_claims(claims, self.policy.audit_seeds)
-        if reasons:
-            raise ValueError(f"baseline fails the rules: {reasons}")
-        self.state = GovernorState(
-            installed_hash=bundle.variant_hash, generation=0, audit_score=score,
-            proxy_score=bundle.manifest.get("proxy_score"),
-        )
-        self._save_state()
-        # Write baseline_hash.txt to the exchange so the Colab runtime can
-        # initialise the Gate without hard-coding the hash.
-        bh_path = self.exchange / "baseline_hash.txt"
-        bh_path.parent.mkdir(parents=True, exist_ok=True)
-        bh_path.write_text(bundle.variant_hash + "\n", encoding="utf-8")
-        self.log.append("init_run", {"run_id": self.policy.run_id,
-                                     "variant_hash": bundle.variant_hash, "audit_score": score})
-        return self.state
+        with self._locked():
+            if self.state is not None:
+                raise RuntimeError("run already initialised")
+            bundle = load_bundle(baseline_dir)
+            reasons = check_variant(bundle, self.policy, expected_generation=0,
+                                    expected_parent=GENESIS_PARENT)
+            claims = _read_claims(Path(baseline_dir))
+            score = score_claims(claims, self.policy.audit_seeds)
+            if reasons:
+                raise ValueError(f"baseline fails the rules: {reasons}")
+            raw_proxy = bundle.manifest.get("proxy_score")
+            proxy = _valid_proxy_score(raw_proxy)
+            if raw_proxy is not None and proxy is None:
+                raise ValueError(f"baseline has invalid proxy_score: {raw_proxy!r}")
+            self.state = GovernorState(
+                installed_hash=bundle.variant_hash, generation=0, audit_score=score,
+                proxy_score=proxy,
+            )
+            self._save_state()
+            # Write baseline_hash.txt to the exchange so the Colab runtime can
+            # initialise the Gate without hard-coding the hash.
+            bh_path = self.exchange / "baseline_hash.txt"
+            bh_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_bh = bh_path.with_name(f".{bh_path.name}.tmp")
+            tmp_bh.write_text(bundle.variant_hash + "\n", encoding="utf-8")
+            os.replace(tmp_bh, bh_path)
+            self.log.append("init_run", {"run_id": self.policy.run_id,
+                                         "variant_hash": bundle.variant_hash, "audit_score": score})
+            return self.state
 
     def kill(self, reason: str) -> None:
-        st = self._require_state()
-        st.killed = True
-        self._save_state()
-        self.log.append("kill", {"reason": reason})
-        self.heartbeat()
+        with self._locked():
+            st = self._require_state()
+            st.killed = True
+            self._save_state()
+            self.log.append("kill", {"reason": reason})
+            self.heartbeat()
 
     # ----- heartbeat ---------------------------------------------------------
 
     def heartbeat(self) -> dict[str, Any]:
-        st = self._require_state()
-        st.heartbeat_counter += 1
-        self._save_state()
-        token = sign(heartbeat_body(run_id=self.policy.run_id, counter=st.heartbeat_counter,
-                                    now=self.clock(), ttl_s=self.policy.heartbeat_ttl_s,
-                                    halt=st.killed), self.key)
-        atomic_write_json(self.exchange / "heartbeat.json", token)
-        return token
+        with self._locked():
+            st = self._require_state()
+            st.heartbeat_counter += 1
+            self._save_state()
+            token = sign(heartbeat_body(run_id=self.policy.run_id, counter=st.heartbeat_counter,
+                                        now=self.clock(), ttl_s=self.policy.heartbeat_ttl_s,
+                                        halt=st.killed), self.key)
+            atomic_write_json(self.exchange / "heartbeat.json", token)
+            return token
 
     # ----- proposals ---------------------------------------------------------
 
@@ -135,72 +175,95 @@ class Governor:
         pdir = self.exchange / "proposals"
         if not pdir.exists():
             return []
-        return [p for p in sorted(pdir.iterdir())
-                if p.is_dir() and not p.name.startswith(".")
-                and not (self.exchange / "approvals" / f"{p.name}.json").exists()]
+        out: list[Path] = []
+        for p in sorted(pdir.iterdir()):
+            if not p.is_dir() or p.name.startswith("."):
+                continue
+            if (self.exchange / "approvals" / f"{p.name}.json").exists():
+                continue
+            if self.policy.require_ready_marker and not (p / ".ready").is_file():
+                continue
+            out.append(p)
+        return out
 
     def review(self, proposal_dir: Path) -> dict[str, Any]:
         """Decide one proposal, write the signed decision, and log it."""
-        st = self._require_state()
-        proposal_dir = Path(proposal_dir)
-        reasons: list[str] = []
-        variant_hash, generation = "invalid", st.generation + 1
-        audit = proxy = None
+        with self._locked():
+            st = self._require_state()
+            proposal_dir = Path(proposal_dir)
+            reasons: list[str] = []
+            variant_hash, generation = "invalid", st.generation + 1
+            audit = proxy = None
 
-        if st.killed:
-            reasons.append("run has been halted by the kill switch")
-        try:
-            bundle = load_bundle(proposal_dir)
-            variant_hash = bundle.variant_hash
-            generation = bundle.manifest.get("generation", generation)
-            reasons += check_variant(bundle, self.policy, expected_generation=st.generation + 1,
-                                     expected_parent=st.installed_hash)
-            proxy = bundle.manifest.get("proxy_score")
-        except BundleError as exc:
-            reasons.append(f"bundle rejected: {exc}")
+            if st.killed:
+                reasons.append("run has been halted by the kill switch")
+            try:
+                bundle = load_bundle(proposal_dir)
+                variant_hash = bundle.variant_hash
+                generation = bundle.manifest.get("generation", generation)
+                reasons += check_variant(bundle, self.policy, expected_generation=st.generation + 1,
+                                         expected_parent=st.installed_hash)
+                raw_proxy = bundle.manifest.get("proxy_score")
+                if raw_proxy is not None:
+                    proxy = _valid_proxy_score(raw_proxy)
+                    if proxy is None:
+                        reasons.append(f"invalid proxy_score: {raw_proxy!r}")
+            except BundleError as exc:
+                reasons.append(f"bundle rejected: {exc}")
 
-        try:
-            audit = score_claims(_read_claims(proposal_dir), self.policy.audit_seeds)
-        except (AuditError, OSError, ValueError) as exc:
-            reasons.append(f"audit claims unusable: {exc}")
+            try:
+                audit = score_claims(_read_claims(proposal_dir), self.policy.audit_seeds)
+            except (AuditError, OSError, ValueError) as exc:
+                reasons.append(f"audit claims unusable: {exc}")
 
-        if audit is not None:
-            if audit < st.audit_score:
-                reasons.append(f"audit score fell from {st.audit_score:.3f} to {audit:.3f}")
-            proxy_gain = (proxy is not None and st.proxy_score is not None
-                          and proxy > st.proxy_score)
-            if proxy_gain and audit <= st.audit_score:
-                reasons.append("proxy-only gain: evaluator score rose but audit score did not")
+            if audit is not None:
+                if audit < st.audit_score:
+                    reasons.append(f"audit score fell from {st.audit_score:.3f} to {audit:.3f}")
+                proxy_gain = (proxy is not None and st.proxy_score is not None
+                              and proxy > st.proxy_score)
+                if proxy_gain and audit <= st.audit_score:
+                    reasons.append("proxy-only gain: evaluator score rose but audit score did not")
 
-        approve = not reasons
-        body = approval_body(run_id=self.policy.run_id,
-                             generation=generation if isinstance(generation, int) else -1,
-                             variant_hash=variant_hash, approve=approve,
-                             reasons=reasons or ["all rules passed"], now=self.clock(),
-                             ttl_s=self.policy.approval_ttl_s)
-        token = sign(body, self.key)
-        atomic_write_json(self.exchange / "approvals" / f"{proposal_dir.name}.json", token)
+            approve = not reasons
+            safe_gen = generation if (isinstance(generation, int) and not isinstance(generation, bool)) else -1
+            body = approval_body(run_id=self.policy.run_id,
+                                 generation=safe_gen,
+                                 variant_hash=variant_hash, approve=approve,
+                                 reasons=reasons or ["all rules passed"], now=self.clock(),
+                                 ttl_s=self.policy.approval_ttl_s)
+            token = sign(body, self.key)
+            atomic_write_json(self.exchange / "approvals" / f"{proposal_dir.name}.json", token)
 
-        if approve:
-            st.installed_hash, st.generation = variant_hash, generation
-            st.audit_score = audit
-            if proxy is not None:
-                st.proxy_score = proxy
-            st.approvals += 1
-        else:
-            st.vetoes += 1
-        self._save_state()
-        self.log.append("decision", {"proposal": proposal_dir.name, "decision": body["decision"],
-                                     "generation": body["generation"],
-                                     "variant_hash": variant_hash, "audit_score": audit,
-                                     "proxy_score": proxy, "reasons": body["reasons"]})
-        return token
+            if approve:
+                st.installed_hash, st.generation = variant_hash, safe_gen
+                st.audit_score = audit
+                if proxy is not None:
+                    st.proxy_score = proxy
+                st.approvals += 1
+            else:
+                st.vetoes += 1
+            self._save_state()
+            self.log.append("decision", {"proposal": proposal_dir.name, "decision": body["decision"],
+                                         "generation": body["generation"],
+                                         "variant_hash": variant_hash, "audit_score": audit,
+                                         "proxy_score": proxy, "reasons": body["reasons"]})
+            return token
 
     def step(self) -> list[dict[str, Any]]:
         """One service tick: decide all pending proposals, then send a heartbeat."""
-        decisions = [self.review(p) for p in self.pending_proposals()]
-        self.heartbeat()
-        return decisions
+        with self._locked():
+            decisions = [self.review(p) for p in self.pending_proposals()]
+            self.heartbeat()
+            return decisions
+
+
+def _valid_proxy_score(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    f = float(value)
+    if math.isnan(f) or math.isinf(f):
+        return None
+    return f
 
 
 def _read_claims(proposal_dir: Path) -> Any:

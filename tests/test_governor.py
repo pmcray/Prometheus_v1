@@ -85,12 +85,21 @@ def test_redteam_path_escape(setup):
     "import requests\n",
     "import subprocess\nsubprocess.run(['curl','x'])\n",
     "import os\nos.system('curl example.com')\n",
+    "import os\n",
+    "import sys\n",
+    "import pathlib\n",
+    "import codecs\n",
+    "import _io\n",
+    "import _socket\n",
+    "open('/etc/passwd')\n",
     "__import__('socket')\n",
     "eval('1+1')\n",
+    "f = eval\nf('1+1')\n",
     "x = getattr(__builtins__, 'ev' + 'al')\n",
     "import importlib\nimportlib.import_module('socket')\n",
     "from ..runtime import gate\n",
     "import ctypes\n",
+    "x = e.tb_frame.f_back\n",
 ])
 def test_redteam_network_or_escape_in_tool(setup, src):
     _, body = decide(setup, "rt5", files={"harness/tools/probe.py": src})
@@ -256,3 +265,102 @@ def test_decision_log_is_tamper_evident(setup):
     lines[-1] = json.dumps(rec)
     path.write_text("\n".join(lines) + "\n")
     assert not verify_log(path).ok
+
+
+def test_redteam_bool_generation_is_vetoed(setup):
+    """In Python isinstance(True, int) is True; generation=True must still be rejected."""
+    _, body = decide(setup, "rt-bool-gen", generation=True, claims_obj=claims(6))
+    assert body["decision"] == "veto"
+
+
+def test_redteam_invalid_proxy_score_is_vetoed_without_crashing(setup):
+    """Non-numeric or boolean proxy_score must produce a clean veto, not crash the governor."""
+    for bad in ("high", True, float("nan"), [1.0]):
+        if isinstance(bad, float):
+            # canonical JSON forbids NaN, so test string/bool/list in manifest
+            continue
+        _, body = decide(setup, f"rt-proxy-{type(bad).__name__}", claims_obj=claims(6), proxy=bad)
+        assert body["decision"] == "veto"
+
+
+def test_redteam_bool_heartbeat_counter_is_rejected(setup):
+    s = setup
+    bad = sign({"type": "heartbeat", "run_id": "run-test", "counter": True,
+                "issued_at": s["clock"](), "expires_at": s["clock"]() + 900, "halt": False},
+               s["key"])
+    (s["exchange"] / "heartbeat.json").write_text(json.dumps(bad))
+    with pytest.raises(Halted):
+        s["gate"].check_heartbeat()
+
+
+def test_redteam_kill_from_second_process_survives_daemon_tick(setup):
+    """Pulling kill from a separate CLI process must not be undone by a running daemon."""
+    from prometheus.governor.service import Governor
+
+    s = setup
+    daemon = s["gov"]
+    cli_gov = Governor(daemon.home, daemon.exchange, s["key"], clock=s["clock"])
+
+    # CLI pulls the kill switch while the daemon still holds its old instance in memory.
+    cli_gov.kill("emergency stop")
+    hb_after_kill = json.loads((s["exchange"] / "heartbeat.json").read_text())["body"]
+    assert hb_after_kill["halt"] is True
+
+    # Daemon wakes up for its next tick: must preserve killed=True, increment counter,
+    # keep halt=True, and preserve a valid hash-chained decision log.
+    daemon.step()
+    hb_after_tick = json.loads((s["exchange"] / "heartbeat.json").read_text())["body"]
+    assert hb_after_tick["halt"] is True
+    assert hb_after_tick["counter"] > hb_after_kill["counter"]
+    assert daemon.state.killed is True
+    assert verify_log(daemon.log.path).ok
+    with pytest.raises(Halted, match="kill switch"):
+        s["gate"].check_heartbeat()
+
+
+def test_require_ready_marker_skips_partial_proposals(setup):
+    """When require_ready_marker=True, incomplete proposals are ignored until .ready exists."""
+    s = setup
+    s["gov"].policy.require_ready_marker = True
+    bundle = make_proposal(s["exchange"], "partial", generation=1,
+                           parent=s["gate"].installed_hash, claims_obj=claims(6))
+    assert s["gov"].pending_proposals() == []
+    s["gov"].step()
+    assert not (s["exchange"] / "approvals" / "partial.json").exists()
+
+    (bundle.root / ".ready").write_text(bundle.variant_hash + "\n")
+    assert s["gov"].pending_proposals() == [bundle.root]
+    s["gov"].step()
+    body = json.loads((s["exchange"] / "approvals" / "partial.json").read_text())["body"]
+    assert body["decision"] == "approve"
+
+
+def test_gate_persists_state_across_restart_with_external_state_path(setup):
+    """Gate state stored on persistent Drive survives an ephemeral install_root wipe."""
+    from prometheus.governor.keys import public_key_hex
+    from prometheus.runtime.gate import Gate
+
+    s = setup
+    state_file = s["tmp"] / "drive_persistent_gate_state.json"
+    ephemeral_dir = s["tmp"] / "ephemeral_install"
+    gate1 = Gate(governor_public_key_hex=public_key_hex(s["key"]), run_id="run-test",
+                 exchange=s["exchange"], install_root=ephemeral_dir,
+                 baseline_hash=s["baseline"].variant_hash, clock=s["clock"],
+                 state_path=state_file)
+    gate1.check_heartbeat()
+    bundle = make_proposal(s["exchange"], "g1-persist", generation=1,
+                           parent=gate1.installed_hash, claims_obj=claims(6))
+    s["gov"].step()
+    gate1.install(bundle.root)
+    assert gate1.generation == 1
+
+    # Simulate forced Colab restart wiping local ephemeral_dir
+    import shutil
+    shutil.rmtree(ephemeral_dir)
+    gate2 = Gate(governor_public_key_hex=public_key_hex(s["key"]), run_id="run-test",
+                 exchange=s["exchange"], install_root=ephemeral_dir,
+                 baseline_hash=s["baseline"].variant_hash, clock=s["clock"],
+                 state_path=state_file)
+    assert gate2.generation == 1
+    assert gate2.installed_hash == bundle.variant_hash
+

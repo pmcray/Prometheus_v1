@@ -13,6 +13,7 @@ the governor's public key. Two duties:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 from pathlib import Path
@@ -36,22 +37,29 @@ class InstallRefused(RuntimeError):
 class Gate:
     def __init__(self, *, governor_public_key_hex: str, run_id: str, exchange: Path,
                  install_root: Path, baseline_hash: str,
-                 clock: Callable[[], float] = time.time, max_clock_skew_s: float = 60.0):
+                 clock: Callable[[], float] = time.time, max_clock_skew_s: float = 60.0,
+                 state_path: Path | None = None):
         self.pub = load_public_key_hex(governor_public_key_hex)
         self.run_id = run_id
         self.exchange, self.install_root = Path(exchange), Path(install_root)
         self.clock, self.skew = clock, max_clock_skew_s
-        self._state_path = self.install_root / ".gate_state.json"
+        self._state_path = Path(state_path) if state_path is not None else (self.install_root / ".gate_state.json")
         self.install_root.mkdir(parents=True, exist_ok=True)
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
         if self._state_path.exists():
-            self._state = json.loads(self._state_path.read_text())
+            self._state = json.loads(self._state_path.read_text(encoding="utf-8"))
         else:
             self._state = {"installed_hash": baseline_hash, "generation": 0,
                            "last_heartbeat_counter": 0}
             self._save()
 
     def _save(self) -> None:
-        self._state_path.write_text(json.dumps(self._state, sort_keys=True))
+        tmp = self._state_path.with_name(f".{self._state_path.name}.tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(self._state, fh, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, self._state_path)
 
     @property
     def installed_hash(self) -> str:
@@ -86,7 +94,7 @@ class Gate:
         if not self._fresh(body, now):
             raise Halted("heartbeat expired")
         counter = body.get("counter")
-        if not isinstance(counter, int) or counter < self._state["last_heartbeat_counter"]:
+        if isinstance(counter, bool) or not isinstance(counter, int) or counter < self._state["last_heartbeat_counter"]:
             raise Halted("heartbeat replayed (counter went backwards)")
         if counter > self._state["last_heartbeat_counter"]:
             self._state["last_heartbeat_counter"] = counter

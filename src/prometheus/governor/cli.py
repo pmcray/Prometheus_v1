@@ -66,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--audit-seeds", required=True, help="e.g. 1000-1049")
     s.add_argument("--model-pin", action="append", default=[], help="name=commit_hash")
     s.add_argument("--max-generations", type=int, default=10)
+    s.add_argument("--require-ready", action="store_true",
+                   help="require a .ready marker file inside proposal dirs before reviewing")
     for name in ("init", "run", "kill"):
         s = sub.add_parser(name)
         s.add_argument("--home", required=True); s.add_argument("--exchange", required=True)
@@ -89,7 +91,8 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "policy":
         pins = dict(pin.split("=", 1) for pin in args.model_pin)
         policy = Policy(run_id=args.run_id, audit_seeds=_seeds(args.audit_seeds),
-                        model_pins=pins, max_generations=args.max_generations)
+                        model_pins=pins, max_generations=args.max_generations,
+                        require_ready_marker=args.require_ready)
         policy.save(Path(args.home) / "policy.json")
         print(f"policy written: {len(policy.audit_seeds)} audit worlds, {len(pins)} model pins")
     elif args.cmd == "init":

@@ -59,20 +59,22 @@ class EpisodeResult:
 def _sample_observations(
     world: HiddenLawWorld,
     max_obs: int = 200,
+    repeats: int | None = None,
 ) -> list[dict[str, Any]]:
     """Fill the world's budget with a deterministic set of experiments.
 
-    Priority order:
-      1. All (a, a) combine pairs (idempotency test, cheap).
+    Per pass, priority order:
+      1. All (a, a) combine pairs (idempotency test).
       2. All (a, b) combine pairs where a ≠ b (commutativity / associativity).
       3. All transform(a) values (f-law tests, half-price).
 
-    Stops early when the budget is exhausted or ``max_obs`` is reached.
-    Returns observations as plain dicts (matching world.history schema).
+    When ``world.noise > 0`` and *repeats* is not explicitly given, runs up to
+    3 full passes (bounded by *max_obs* and remaining budget) so noisy single
+    outliers can be resolved by majority vote.
     """
     s = world.symbols
-    n = len(s)
     observations: list[dict[str, Any]] = []
+    n_passes = repeats if repeats is not None else (3 if world.noise > 0 else 1)
 
     def _record(kind: str, args: tuple, result: str, cost: float) -> None:
         observations.append({
@@ -82,37 +84,48 @@ def _sample_observations(
             "cost": cost,
         })
 
-    # Self-combine: a ⋆ a
-    for a in s:
-        if len(observations) >= max_obs or world.remaining < world.combine_cost:
-            break
-        try:
-            result = world.combine(a, a)
-            _record("combine", (a, a), result, world.combine_cost)
-        except BudgetExhausted:
-            break
+    for _pass in range(max(1, n_passes)):
+        before = len(observations)
 
-    # Cross-combine: a ⋆ b (a ≠ b)
-    for i, a in enumerate(s):
-        for j, b in enumerate(s):
-            if i == j:
-                continue
+        # Self-combine: a ⋆ a
+        for a in s:
             if len(observations) >= max_obs or world.remaining < world.combine_cost:
                 break
             try:
-                result = world.combine(a, b)
-                _record("combine", (a, b), result, world.combine_cost)
+                result = world.combine(a, a)
+                _record("combine", (a, a), result, world.combine_cost)
             except BudgetExhausted:
                 break
 
-    # Transform: f(a)
-    for a in s:
-        if len(observations) >= max_obs or world.remaining < world.transform_cost:
-            break
-        try:
-            result = world.transform(a)
-            _record("transform", (a,), result, world.transform_cost)
-        except BudgetExhausted:
+        # Cross-combine: a ⋆ b (a ≠ b)
+        stop_cross = False
+        for i, a in enumerate(s):
+            if stop_cross:
+                break
+            for j, b in enumerate(s):
+                if i == j:
+                    continue
+                if len(observations) >= max_obs or world.remaining < world.combine_cost:
+                    stop_cross = True
+                    break
+                try:
+                    result = world.combine(a, b)
+                    _record("combine", (a, b), result, world.combine_cost)
+                except BudgetExhausted:
+                    stop_cross = True
+                    break
+
+        # Transform: f(a)
+        for a in s:
+            if len(observations) >= max_obs or world.remaining < world.transform_cost:
+                break
+            try:
+                result = world.transform(a)
+                _record("transform", (a,), result, world.transform_cost)
+            except BudgetExhausted:
+                break
+
+        if len(observations) == before or len(observations) >= max_obs:
             break
 
     return observations
@@ -158,6 +171,7 @@ def run_episode(
         symbols=world.symbols,
         observations=observations,
         budget_remaining=world.remaining,
+        noise=world.noise,
     )
 
     # Call model

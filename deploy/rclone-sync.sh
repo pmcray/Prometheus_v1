@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Two-way sync between Google Drive and the governor's local exchange folder.
+# Two-way copy between Google Drive and the governor's local exchange folder.
 # Run from a systemd timer (every 30-60 s) as the `governor` user.
 #
 # One-time setup:  rclone config   -> create a remote named "gdrive" (Google Drive)
 #
-# Direction matters:
-#   proposals/ and logs/   Drive -> workstation   (written by the Colab runtime)
-#   approvals/, heartbeat  workstation -> Drive   (written by the governor)
+# Direction matters (NEVER use destructive `rclone sync` across a shared folder):
+#   proposals/ and logs/                    Drive -> workstation  (written by Colab)
+#   approvals/, heartbeat, baseline_hash    workstation -> Drive  (written by governor)
 set -euo pipefail
 
 RUN_ID="${RUN_ID:-run-001}"
@@ -15,7 +15,18 @@ LOCAL="${LOCAL:-/var/lib/prometheus-governor/drive/${RUN_ID}}"
 
 mkdir -p "${LOCAL}/proposals" "${LOCAL}/approvals" "${LOCAL}/logs"
 
+# Ensure remote subdirectories exist so initial copy never aborts under set -e.
+rclone mkdir "${REMOTE}/proposals" "${REMOTE}/approvals" "${REMOTE}/logs"
+
+# Pull Colab outputs -> workstation
 rclone copy "${REMOTE}/proposals" "${LOCAL}/proposals" --checksum
 rclone copy "${REMOTE}/logs"      "${LOCAL}/logs"      --checksum
-rclone copy "${LOCAL}/approvals"  "${REMOTE}/approvals" --checksum
-rclone copyto "${LOCAL}/heartbeat.json" "${REMOTE}/heartbeat.json" --checksum 2>/dev/null || true
+
+# Push governor outputs -> Drive
+rclone copy "${LOCAL}/approvals" "${REMOTE}/approvals" --checksum
+if [[ -f "${LOCAL}/baseline_hash.txt" ]]; then
+    rclone copyto "${LOCAL}/baseline_hash.txt" "${REMOTE}/baseline_hash.txt" --checksum
+fi
+if [[ -f "${LOCAL}/heartbeat.json" ]]; then
+    rclone copyto "${LOCAL}/heartbeat.json" "${REMOTE}/heartbeat.json" --checksum
+fi

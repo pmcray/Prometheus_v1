@@ -1,40 +1,47 @@
 # Prometheus v1
 
-A small, fully inspectable demonstrator of I.J. Good's ultraintelligence principles:
-meaning as compression, recall as probabilistic regeneration, assembly-style memory,
-and a self-improvement loop kept under control by a governor the agent cannot modify.
+A small, fully inspectable demonstrator of I.J. Good's ultraintelligence principles
+combined with Ashby's ultrastability, Hofstadter's strange loops / analogy, and
+Friston's free-energy principle: meaning as compression, recall as probabilistic
+regeneration, assembly-style memory, active inference over sparse data, and a
+self-improvement loop kept under control by a governor the agent cannot modify.
 
 Design document: *Prometheus v1 Demonstrator: Design and Roadmap* (Claude Docs).
 
-## Status: Phase 0, first increment
+## Status: Phase 0 (infrastructure & hardening)
 
 | Component | State | Where |
 | --- | --- | --- |
 | Hash-chained audit log | Done, tested | `src/prometheus/common/eventlog.py` |
 | Variant bundles (content-hashed harness changes) | Done, tested | `src/prometheus/common/variant.py` |
-| Governor: Ed25519 keys, signed approvals and heartbeats | Done, tested | `src/prometheus/governor/` |
+| Governor: Ed25519 keys, signed approvals & heartbeats, file locking | Done, tested | `src/prometheus/governor/` |
 | Governor: fixed rules, audit scoring, proxy-gain check, kill switch | Done, tested | `governor/rules.py`, `governor/service.py` |
-| Governor CLI and systemd unit | Done; CLI tested, unit not yet installed | `governor/cli.py`, `deploy/` |
-| Colab-side gate (heartbeat check, verified install) | Done, tested | `src/prometheus/runtime/gate.py` |
+| Governor CLI, systemd units, rclone two-way copy script | Done; CLI tested | `governor/cli.py`, `deploy/` |
+| Colab-side gate (heartbeat check, verified atomic install) | Done, tested | `src/prometheus/runtime/gate.py` |
+| Sandbox for agent-written code (AST + audit hook + rlimits + pipe IPC) | Done, tested | `src/prometheus/runtime/sandbox.py` |
 | Hidden-Law Lab world generator, 8 laws, law shift | Done, tested | `src/prometheus/lab/` |
-| Sandbox for agent-written code | Not started (needs testing on Colab) | Phase 0 |
-| Lean 4.9 statements and proofs for each law | Not started | Phase 0 |
-| Foundation-model bake-off | Not started (needs Colab GPU) | Phase 0 |
-| Resumable Colab runtime template | Not started | Phase 0 |
+| Lean 4 ground-truth statement & `decide` proof layer | Done, tested (`v4.34.1` pinned in `lean/`) | `src/prometheus/lab/lean_layer.py`, `lean/` |
+| Resumable Colab runtime template | Done (needs live Colab smoke test) | `colab/prometheus_runtime.ipynb` |
+| Foundation-model bake-off harness & runner | Done, unit-tested (needs Colab GPU run) | `src/prometheus/harness/`, `src/prometheus/bakeoff/` |
 | Observatory dashboard | Not started | Phase 0 |
+| Cognitive core (Friston EFE, Good MDL/memory, Hofstadter transfer) | Not started | Phase 1+ |
 
-Tests: 53 passing, including 34 red-team cases the governor must block (`pytest -k redteam`).
+Run `pytest -q` for the full suite, or `pytest -q -k redteam` for the governor/gate/sandbox red-team checks.
 
 ## Layout
 
 ```
 src/prometheus/
-  common/     canonical JSON + hashing, event log, variant bundles   (shared)
+  common/     canonical JSON + hashing, event log, variant bundles    (shared)
   governor/   runs on the workstation only: keys, tokens, policy, rules, service, CLI
-  runtime/    runs on Colab: the gate that enforces the governor's decisions
-  lab/        Hidden-Law Lab: planted algebraic worlds, law catalogue, audit scoring
+  runtime/    runs on Colab: cryptographic gate + hardened subprocess sandbox
+  lab/        Hidden-Law Lab: planted algebraic worlds, law catalogue, audit, Lean 4 layer
+  harness/    model client (vLLM OpenAI API), prompts, episode runner
+  bakeoff/    candidate model registry + resumable MLflow bake-off runner
+lean/         pinned Lean 4 toolchain & Mathlib manifest (PrometheusLaws)
+colab/        resumable Colab runtime + bake-off notebook template
 tests/        pytest suite (red-team cases named test_redteam_*)
-deploy/       systemd unit and rclone sync script for the governor workstation
+deploy/       systemd units and rclone two-way copy script for the governor workstation
 ```
 
 ## How the pieces fit
@@ -70,7 +77,8 @@ pytest -q
 ```bash
 prometheus-governor keygen --home ~/.prometheus-governor          # prints the public key
 prometheus-governor policy --home ~/.prometheus-governor --run-id run-001 \
-    --audit-seeds 1000-1049 --model-pin cortex=<hf-commit> --model-pin prover=<hf-commit>
+    --audit-seeds 1000-1049 --model-pin cortex=<hf-commit> --model-pin prover=<hf-commit> \
+    --require-ready
 prometheus-governor init   --home ~/.prometheus-governor --exchange <synced-run-folder> \
     --baseline <baseline-bundle>
 prometheus-governor run    --home ~/.prometheus-governor --exchange <synced-run-folder>
@@ -78,16 +86,21 @@ prometheus-governor kill   --home ~/.prometheus-governor --exchange <synced-run-
 ```
 
 For unattended operation use `deploy/prometheus-governor.service` (systemd 250+ for
-encrypted credentials: `systemd-creds encrypt`) with `deploy/rclone-sync.sh` on a timer.
-The governor service itself is denied network access; only the rclone job talks to Drive.
+encrypted credentials: `systemd-creds encrypt`) with `deploy/rclone-sync.sh` on
+`deploy/rclone-sync.timer`. The governor service itself is denied network access; only
+the rclone job talks to Drive.
 
 ## Known limits of this increment
 
-- The static scan of agent-written Python is defence in depth, not the main barrier.
-  The main barrier is the sandbox (unprivileged user, no network), still to be built
-  and verified on Colab.
+- On Colab (no user namespaces), the sandbox relies on isolated subprocess execution
+  (`python -I`), static AST screening, a strict allowlist import hook, an irreversible
+  CPython `sys.addaudithook`, and kernel rlimits (`RLIMIT_CPU`, `RLIMIT_AS`,
+  `RLIMIT_NPROC`).
 - Rules are strict by design: a false veto costs one generation, a false approval
   could cost the run.
+- `lean/PrometheusLaws/lean-toolchain` currently pins `v4.34.1` for Lean core `decide`
+  ground-truth proofs; if `Goedel-Prover-V2-8B` is selected for the prover role, align
+  the prover's Lean/Mathlib toolchain (Lean 4.9) before running Phase 0 step 5b.
 - The Hidden-Law Lab currently covers finite algebraic structures with 8 laws. A
   majority-vote guesser scores about 66% on law claims; that is the floor the agent
   must beat.

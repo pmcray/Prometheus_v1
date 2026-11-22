@@ -59,6 +59,10 @@ class EventLog:
             return 0, GENESIS_HASH
         return last["seq"] + 1, last["hash"]
 
+    def sync(self) -> None:
+        """Reload chain head from disk (verifying integrity first)."""
+        self._seq, self._last_hash = self._tail()
+
     def append(self, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
         record = {
             "seq": self._seq,

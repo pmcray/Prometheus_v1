@@ -16,7 +16,7 @@ import shutil
 import pytest
 
 from prometheus.lab import HiddenLawWorld, world_lean_source, verify_lean_source
-from prometheus.lab.lean_layer import _lean_bin, verify_world
+from prometheus.lab.lean_layer import _lean_bin, _lean_project_dir, verify_world
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +121,13 @@ class TestSourceGeneration:
 # ---------------------------------------------------------------------------
 
 # Seeds chosen to cover all 8 structure families.
-_FAMILY_SEEDS = [0, 1, 2, 3, 6, 7, 12, 16]
+_FAMILY_SEEDS = [0, 1, 3, 6, 7, 8, 9, 10]
+
+
+def test_family_seeds_cover_all_eight_families():
+    from prometheus.lab.algebra import FAMILIES
+    covered = {HiddenLawWorld(seed=s).family for s in _FAMILY_SEEDS}
+    assert covered == set(FAMILIES)
 
 
 @lean
@@ -155,8 +161,15 @@ def test_lean_rejects_bad_source():
 @lean
 @slow
 def test_lean_toolchain_is_v4_34():
-    """The active lean binary reports version 4.34.x."""
+    """The Lean binary invoked inside lean/PrometheusLaws matches lean-toolchain."""
     import subprocess
     lean_path = _lean_bin()
-    result = subprocess.run([lean_path, "--version"], capture_output=True, text=True, timeout=15)
-    assert "4.34" in result.stdout, f"unexpected version: {result.stdout.strip()}"
+    project_dir = _lean_project_dir()
+    assert project_dir is not None
+    pinned = (project_dir / "lean-toolchain").read_text(encoding="utf-8").strip()
+    expected_minor = pinned.split(":v")[-1].rsplit(".", 1)[0]  # e.g. "4.34"
+    result = subprocess.run(
+        [lean_path, "--version"],
+        capture_output=True, text=True, timeout=15, cwd=project_dir,
+    )
+    assert expected_minor in result.stdout, f"unexpected version: {result.stdout.strip()} (pinned {pinned})"

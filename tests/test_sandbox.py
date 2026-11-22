@@ -133,6 +133,43 @@ def test_run_or_raise_raises_on_bad_code():
         run_or_raise("import socket")
 
 
+def test_print_stdout_captured_without_breaking_result():
+    r = ok(run("print('hello sandbox'); return_value = {'sum': 1 + 2}"))
+    assert r.return_value == {"sum": 3}
+    assert "hello sandbox" in r.stdout
+
+
+def test_class_and_dataclass_definitions_work():
+    code = """
+import dataclasses, enum
+
+class Color(enum.Enum):
+    RED = 1
+    BLUE = 2
+
+@dataclasses.dataclass
+class Point:
+    x: int
+    y: int
+
+p = Point(3, 4)
+return_value = [p.x + p.y, Color.BLUE.value]
+"""
+    r = ok(run(code))
+    assert r.return_value == [7, 2]
+
+
+def test_time_monotonic_works():
+    r = ok(run("import time; return_value = time.monotonic() > 0"))
+    assert r.return_value is True
+
+
+def test_non_json_return_value_reports_clean_error():
+    r = run("return_value = {1, 2, 3}")
+    assert r.error is not None
+    assert "JSON" in r.error or "TypeError" in r.error
+
+
 # ---------------------------------------------------------------------------
 # Redteam tests — every attempt to escape must be blocked
 # ---------------------------------------------------------------------------
@@ -236,22 +273,30 @@ def test_redteam_io_blocked():
 
 
 def test_redteam_cpu_limit_kills_infinite_loop():
-    """An infinite loop must be killed within cpu_seconds + a small margin."""
+    """An infinite loop must be killed as a CPU timeout (NOT misclassified as OOM)."""
     start = time.time()
-    r = run("while True: pass", cpu_seconds=2, wall_seconds=15)
+    r = run("while True: pass", cpu_seconds=1, wall_seconds=15)
     elapsed = time.time() - start
-    assert r.timed_out or r.oom_killed or (r.error is not None and "limit" in r.error.lower()), (
-        f"Expected sandbox kill, got: {r}"
-    )
+    assert r.timed_out is True, f"Expected timed_out=True, got: {r}"
+    assert r.oom_killed is False, f"CPU limit must not be misclassified as OOM: {r}"
+    assert r.error is not None and "CPU" in r.error
     assert elapsed < 10, f"Took too long to kill ({elapsed:.1f}s)"
 
 
+def test_redteam_wall_clock_timeout_does_not_crash():
+    """Wall-clock timeout must return timed_out=True cleanly without crashing."""
+    r = run("while True: pass", cpu_seconds=10, wall_seconds=0.4)
+    assert r.timed_out is True
+    assert r.oom_killed is False
+    assert r.error is not None and "wall-clock" in r.error
+
+
 def test_redteam_memory_limit_kills_allocation():
-    """Allocating more RAM than the limit must terminate the child."""
-    # Allocate 512 MB in one shot against a 64 MB limit.
+    """Allocating more RAM than the limit must report oom_killed=True."""
     code = "x = b'A' * (512 * 1024 * 1024)"
     r = run(code, memory_mb=64, wall_seconds=15)
-    assert r.oom_killed or r.timed_out or r.error is not None
+    assert r.oom_killed is True, f"Expected oom_killed=True, got: {r}"
+    assert r.error is not None
 
 
 def test_redteam_fork_bomb_limited():
@@ -292,3 +337,89 @@ def test_redteam_pickle_blocked():
     """pickle can execute arbitrary code via __reduce__."""
     r = run("import pickle")
     assert r.error is not None
+
+
+def test_redteam_underscore_io_blocked():
+    """Direct C-extension _io import must be blocked."""
+    r = run("import _io; return_value = _io.open('/etc/hostname').read()")
+    assert r.error is not None
+    assert r.return_value is None
+
+
+def test_redteam_underscore_socket_blocked():
+    """Direct C-extension _socket import must be blocked."""
+    r = run("import _socket; return_value = _socket.socket()")
+    assert r.error is not None
+    assert r.return_value is None
+
+
+def test_redteam_underscore_posixsubprocess_blocked():
+    r = run("import _posixsubprocess")
+    assert r.error is not None
+
+
+def test_redteam_underscore_ctypes_blocked():
+    r = run("import _ctypes")
+    assert r.error is not None
+
+
+def test_redteam_codecs_open_blocked():
+    """codecs.open() gives file access and must be blocked."""
+    r = run("import codecs; return_value = codecs.open('/etc/hostname').read()")
+    assert r.error is not None
+    assert r.return_value is None
+
+
+def test_redteam_time_sleep_blocked():
+    """time proxy must be read-only (no sleep)."""
+    r = run("import time; time.sleep(0.1)")
+    assert r.error is not None
+
+
+def test_redteam_subclasses_escape_blocked():
+    """Classic Python object-hierarchy escape must be blocked."""
+    r = run("return_value = ().__class__.__base__.__subclasses__()")
+    assert r.error is not None
+    assert r.return_value is None
+
+
+def test_redteam_traceback_frame_escape_blocked():
+    """Inspecting exception traceback frames to reach runner globals must be blocked."""
+    code = """
+try:
+    1 / 0
+except Exception as e:
+    return_value = list(e.__traceback__.tb_frame.f_back.f_globals.keys())
+"""
+    r = run(code)
+    assert r.error is not None
+    assert r.return_value is None
+
+
+def test_redteam_getattr_escape_blocked():
+    r = run("return_value = getattr((), '__class__')")
+    assert r.error is not None
+    assert r.return_value is None
+
+
+def test_redteam_audit_hook_blocks_module_gadget_open():
+    """Even reaching builtins.open via stdlib module globals is blocked by sys.addaudithook."""
+    r = run("import typing; return_value = typing.sys.modules['builtins'].open('/etc/hostname').read()")
+    assert r.error is not None
+    assert r.return_value is None
+
+
+def test_redteam_audit_hook_blocks_module_gadget_os_system():
+    """Even reaching os.system via stdlib module globals is blocked by sys.addaudithook."""
+    r = run("import typing; return_value = typing.sys.modules['os'].system('id')")
+    assert r.error is not None
+    assert r.return_value is None
+
+
+def test_redteam_host_env_secrets_not_inherited(monkeypatch):
+    """Host environment variables (passphrases, tokens) must never enter the sandbox child."""
+    monkeypatch.setenv("PROMETHEUS_TEST_SECRET", "top-secret-value")
+    r = run("import typing; return_value = typing.sys.modules['os'].environ.get('PROMETHEUS_TEST_SECRET')")
+    assert r.return_value is None
+
+

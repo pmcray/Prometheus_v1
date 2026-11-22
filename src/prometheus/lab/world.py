@@ -55,20 +55,33 @@ class HiddenLawWorld:
         self._noise_rng = random.Random(f"noise:{self.seed}")
 
     def _build(self, rng: random.Random, *, avoid_family: str | None = None) -> None:
-        families = sorted(k for k in FAMILIES if k != avoid_family)
-        for _attempt in range(10_000):
+        if avoid_family is not None:
+            target_n = len(self.symbols)
+            families = sorted(
+                k for k, (_ctor, sizes) in FAMILIES.items()
+                if k != avoid_family and target_n in sizes
+            )
+            if not families:
+                raise RuntimeError("could not build a world with these constraints")
+            family = rng.choice(families)
+            ctor, _sizes = FAMILIES[family]
+            n = target_n
+        else:
+            families = sorted(FAMILIES)
             family = rng.choice(families)
             ctor, sizes = FAMILIES[family]
             n = rng.choice(sizes)
-            if avoid_family is not None and n != len(self.symbols):
-                continue
-            op = ctor(n, rng)
-            map_kind = rng.choice(sorted(MAPS))
-            f = MAPS[map_kind](op, rng)
-            if f is not None:
-                break
-        else:
+        op = ctor(n, rng)
+        # Sample map_kind independently so non-group families (where f_inverse
+        # returns None) are not rejected and under-represented.
+        valid_maps = [
+            (name, f_val)
+            for name in sorted(MAPS)
+            if (f_val := MAPS[name](op, rng)) is not None
+        ]
+        if not valid_maps:
             raise RuntimeError("could not build a world with these constraints")
+        map_kind, f = rng.choice(valid_maps)
         perm = list(range(n))
         rng.shuffle(perm)
         self._op, self._f = relabel(op, f, perm)
@@ -91,14 +104,16 @@ class HiddenLawWorld:
         return self.symbols[true_idx]
 
     def combine(self, a: str, b: str) -> str:
+        ia, ib = self._index[a], self._index[b]
         self._charge(self.combine_cost)
-        out = self._observe(self._op[self._index[a]][self._index[b]])
+        out = self._observe(self._op[ia][ib])
         self.history.append(ExperimentRecord("combine", (a, b), out, self.combine_cost))
         return out
 
     def transform(self, a: str) -> str:
+        ia = self._index[a]
         self._charge(self.transform_cost)
-        out = self._observe(self._f[self._index[a]])
+        out = self._observe(self._f[ia])
         self.history.append(ExperimentRecord("transform", (a,), out, self.transform_cost))
         return out
 

@@ -27,13 +27,22 @@ DEFAULT_BANNED_MODULES = (
     "socket", "ssl", "urllib", "http", "requests", "httpx", "aiohttp", "ftplib",
     "smtplib", "telnetlib", "xmlrpc", "subprocess", "multiprocessing", "ctypes",
     "cffi", "importlib", "pty", "signal", "shutil", "webbrowser", "asyncio",
+    "os", "sys", "io", "pathlib", "glob", "tempfile", "gc", "inspect", "pickle",
+    "shelve", "builtins", "threading", "concurrent", "code", "codeop", "resource",
+    "codecs", "fcntl", "mmap", "posix", "nt",
+    "_io", "_socket", "_posixsubprocess", "_ctypes", "_ssl", "_signal", "_thread",
 )
 
-DEFAULT_BANNED_CALLS = ("eval", "exec", "compile", "__import__", "breakpoint")
+DEFAULT_BANNED_CALLS = (
+    "eval", "exec", "compile", "__import__", "breakpoint",
+    "open", "input", "memoryview",
+)
 
 DEFAULT_BANNED_ATTRS = (
     "system", "popen", "spawnl", "spawnv", "spawnve", "execv", "execve", "execl",
     "fork", "kill", "remove", "unlink", "rmdir", "rename", "chmod", "chown",
+    "f_back", "f_globals", "f_locals", "f_builtins", "f_code",
+    "tb_frame", "gi_frame", "cr_frame", "ag_frame",
 )
 
 
@@ -53,6 +62,7 @@ class Policy:
     approval_ttl_s: float = 2 * 3600
     heartbeat_ttl_s: float = 15 * 60
     heartbeat_interval_s: float = 5 * 60
+    require_ready_marker: bool = False
     notes: dict[str, str] = field(default_factory=dict)
 
     def save(self, path: Path) -> None:

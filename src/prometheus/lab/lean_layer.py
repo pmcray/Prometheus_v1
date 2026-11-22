@@ -16,14 +16,14 @@ dependencies beyond the standard library::
     assert ok, err
 
 The generated file:
-- Defines ``CarrierN`` as ``Fin n``.
-- Encodes ``op`` and ``f`` as ``match`` expressions.
+- Defines ``N`` as the carrier cardinality (carrier is ``Fin N``).
+- Encodes ``op`` and ``f`` as ``Array`` tables.
 - For every law that **holds** in the world, emits a ``theorem`` proved by
   ``decide``.
 - For every law that **does not hold**, emits a ``theorem`` of the negation,
   also proved by ``decide``.
 
-No import is needed: ``Fin``, ``Function``, and ``decide`` are all in Lean core.
+No import is needed: ``Fin``, ``Array``, and ``decide`` are all in Lean core.
 """
 
 from __future__ import annotations
@@ -40,6 +40,16 @@ from .world import HiddenLawWorld
 # ---------------------------------------------------------------------------
 
 _LEAN_BINARY: str | None = None
+
+
+def _lean_project_dir() -> Path | None:
+    """Locate ``lean/PrometheusLaws`` so elan honours its ``lean-toolchain`` pin."""
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "lean" / "PrometheusLaws"
+        if (candidate / "lean-toolchain").is_file():
+            return candidate
+    return None
 
 
 def _lean_bin() -> str:
@@ -219,6 +229,7 @@ def verify_lean_source(source: str, timeout: int = 60) -> tuple[bool, str]:
     The *timeout* argument is in seconds.
     """
     lean = _lean_bin()
+    project_dir = _lean_project_dir()
     try:
         result = subprocess.run(
             [lean, "--stdin"],
@@ -226,6 +237,7 @@ def verify_lean_source(source: str, timeout: int = 60) -> tuple[bool, str]:
             capture_output=True,
             text=True,
             timeout=timeout,
+            cwd=project_dir,
         )
     except subprocess.TimeoutExpired:
         return False, f"lean --stdin timed out after {timeout}s"

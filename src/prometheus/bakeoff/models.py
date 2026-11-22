@@ -53,18 +53,23 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         vllm_flags=(
             "--max-model-len", "4096",
             "--gpu-memory-utilization", "0.90",
-            "--dtype", "auto",
+            # T4 (Turing SM75, 15 GB) lacks native BF16 and cannot hold ~16.4 GB
+            # FP16 weights + KV cache; use FP16 compute with 4-bit bitsandbytes
+            # (or switch to --dtype bfloat16 without quantization on L4/A100).
+            "--dtype", "half",
+            "--quantization", "bitsandbytes",
+            "--load-format", "bitsandbytes",
         ),
         # Disable thinking mode for classification tasks (faster, cheaper).
         extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         t4_feasible=True,
         notes=(
-            "Primary cortex candidate. 8B dense, ~16 GB FP16 / ~5 GB Q4. "
-            "Fits T4 at BF16 with --max-model-len 4096. "
-            "Strong reasoning, Apache 2.0."
+            "Primary cortex candidate. 8B dense, ~16.4 GB FP16 / ~5.5 GB 4-bit. "
+            "Requires 4-bit quantization + --dtype half on T4 (15 GB, SM75); "
+            "runs unquantized BF16 on L4/A100. Strong reasoning, Apache 2.0."
         ),
     ),
-    # ── T4 fallback cortex ───────────────────────────────────────────────
+    # ── T4 fallback / larger MoE cortex ──────────────────────────────────
     "gpt-oss-20b": ModelSpec(
         name="gpt-oss-20b",
         hf_id="openai/gpt-oss-20b",
@@ -72,14 +77,14 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         vllm_flags=(
             "--max-model-len", "4096",
             "--gpu-memory-utilization", "0.92",
-            "--dtype", "auto",
+            "--dtype", "half",
         ),
         extra_body={},
         t4_feasible=True,
         notes=(
-            "T4 fallback. MoE, ~16 GB natively quantised MXFP4. "
-            "Fits T4. o3-mini level on reasoning benchmarks. "
-            "Apache 2.0. Requires vLLM ≥ 0.9."
+            "20B MoE (~13.8 GB MXFP4 weights). Tight on T4 15 GB and MXFP4 "
+            "kernels prefer Hopper/Blackwell (L4/A100 recommended if T4 OOMs "
+            "or lacks Marlin fallback). Apache 2.0. Requires vLLM >= 0.9."
         ),
     ),
     # ── Alternative cortex ───────────────────────────────────────────────
@@ -90,13 +95,14 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         vllm_flags=(
             "--max-model-len", "4096",
             "--gpu-memory-utilization", "0.90",
-            "--dtype", "auto",
+            # T4 (SM75) does not support BF16; --dtype half avoids vLLM startup failure.
+            "--dtype", "half",
         ),
         extra_body={},
         t4_feasible=True,
         notes=(
-            "Lightweight alternative. 4B dense, easily fits T4. "
-            "Apache 2.0 (Gemma Terms). Lower capacity but fast."
+            "Lightweight alternative. 4B dense (~8 GB FP16), easily fits T4 "
+            "with --dtype half. Apache 2.0 (Gemma Terms). Lower capacity but fast."
         ),
     ),
     # ── Prover candidate (reference only; not evaluated in law classification) ──
@@ -107,15 +113,16 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         vllm_flags=(
             "--max-model-len", "4096",
             "--gpu-memory-utilization", "0.90",
-            "--dtype", "auto",
+            "--dtype", "half",
+            "--quantization", "bitsandbytes",
+            "--load-format", "bitsandbytes",
         ),
         extra_body={},
         t4_feasible=True,
         notes=(
             "Lean 4 prover role (Phase 0 step 5b, separate evaluation). "
-            "84.6% pass@32 on MiniF2F. "
-            "Listed here for registry completeness; not part of the law-"
-            "classification bake-off."
+            "84.6% pass@32 on MiniF2F; note trained on Lean 4.9. "
+            "Needs 4-bit quantization on T4 (15 GB) or L4/A100 for BF16."
         ),
     ),
 }
