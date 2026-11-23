@@ -155,9 +155,20 @@ class ModelClient:
             )
 
     def health_check(self) -> bool:
-        """Return True if the server responds to a trivial request."""
+        """Return True if the server is reachable and serving ``self.model_id``."""
         try:
-            self.chat([{"role": "user", "content": "ping"}], max_tokens=4)
+            models = self._client().models.list()
+            data = getattr(models, "data", None)
+            if data is not None:
+                ids = {getattr(m, "id", None) for m in data if getattr(m, "id", None)}
+                if self.model_id in ids:
+                    return True
+                if ids:
+                    return False
+        except Exception:
+            return False
+        try:
+            self.chat([{"role": "user", "content": "ping"}], max_tokens=16)
             return True
         except ModelClientError:
             return False

@@ -11,9 +11,11 @@ cortex candidate) to supply tactic proofs, checks that:
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from ..lab.lean_layer import verify_lean_source, world_lean_source
 from ..lab.world import HiddenLawWorld
@@ -42,9 +44,16 @@ class ProverResult:
     latency_s: float = 0.0
     error: str | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
 
 def _strip_lean_fences(raw: str) -> str:
     text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    # Extract the last fenced Lean block if prose (e.g. a proof plan) precedes it.
+    fenced = re.findall(r"```(?:lean4?|)\s*\n(.*?)```", text, flags=re.DOTALL)
+    if fenced:
+        return fenced[-1].strip()
     if text.startswith("```"):
         lines = text.splitlines()
         inner = lines[1:-1] if lines and lines[-1].strip() == "```" else lines[1:]

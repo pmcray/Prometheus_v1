@@ -17,7 +17,12 @@ import unittest.mock as mock
 
 import pytest
 
-from prometheus.bakeoff.models import BAKEOFF_MODELS, MODEL_REGISTRY, ModelSpec
+from prometheus.bakeoff.models import (
+    BAKEOFF_MODELS,
+    MODEL_REGISTRY,
+    ModelSpec,
+    vllm_flags_for_gpu,
+)
 from prometheus.bakeoff.runner import BakeoffConfig, BakeoffSummary, _summarise
 from prometheus.harness.client import ModelClient, ModelClientError
 from prometheus.harness.episode import EpisodeResult, _sample_observations, run_episode
@@ -492,4 +497,120 @@ def test_run_prover_episode_rejects_cheat_without_calling_lean():
     res = run_prover_episode(w, fake_client)
     assert res.proved is False
     assert res.error is not None and "sorry" in res.error
+    assert res.to_dict()["seed"] == 7
+
+
+def test_prover_strip_lean_fences_extracts_final_block_after_proof_plan():
+    from prometheus.harness.prover import _strip_lean_fences
+
+    raw = (
+        "Proof plan:\nWe check each law using `decide`.\n"
+        "```lean\n-- sketch snippet\n```\n"
+        "Here is the complete Lean 4 proof:\n"
+        "```lean4\nabbrev N := 3\ntheorem t : True := by decide\n```\n"
+    )
+    assert _strip_lean_fences(raw) == "abbrev N := 3\ntheorem t : True := by decide"
+
+
+def test_model_client_health_check_uses_models_list():
+    fake_openai = mock.MagicMock()
+    fake_instance = fake_openai.OpenAI.return_value
+
+    m_ok = mock.MagicMock()
+    m_ok.id = "Qwen/Qwen3-8B"
+    fake_instance.models.list.return_value = mock.MagicMock(data=[m_ok])
+
+    with mock.patch("prometheus.harness.client._openai", return_value=fake_openai):
+        client_ok = ModelClient(base_url="http://localhost:8000/v1", model_id="Qwen/Qwen3-8B")
+        assert client_ok.health_check() is True
+        # Wrong model served on localhost:8000 must fail health check
+        client_wrong = ModelClient(base_url="http://localhost:8000/v1", model_id="openai/gpt-oss-20b")
+        assert client_wrong.health_check() is False
+        # Connection failure must return False
+        fake_instance.models.list.side_effect = RuntimeError("Connection error.")
+        assert client_ok.health_check() is False
+
+
+def test_bakeoff_runner_fails_fast_on_unhealthy_server(tmp_path):
+    from prometheus.bakeoff.runner import BakeoffRunner
+
+    ckpt = tmp_path / "ckpt.json"
+    fake_client = mock.MagicMock(spec=ModelClient)
+    fake_client.health_check.return_value = False
+    cfg = BakeoffConfig(
+        model_name="qwen3-8b",
+        n_episodes=5,
+        checkpoint_path=str(ckpt),
+    )
+    with mock.patch.object(BakeoffRunner, "_make_client", return_value=fake_client):
+        with pytest.raises(ModelClientError, match="failed health check"):
+            BakeoffRunner(cfg).run()
+    # Checkpoint must not be created or polluted with error episodes
+    assert not ckpt.exists()
+
+
+def test_bakeoff_runner_recovers_if_resumed_mlflow_run_missing(tmp_path):
+    from prometheus.bakeoff.runner import BakeoffRunner
+
+    ckpt = tmp_path / "ckpt.json"
+    ckpt.write_text(
+        json.dumps({
+            "model_name": "qwen3-8b",
+            "next_episode": 0,
+            "mlflow_run_id": "stale-run-id",
+            "results": {},
+        })
+    )
+
+    class FakeRun:
+        class info:
+            run_id = "fresh-run-id"
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+
+    fake_mlflow = mock.MagicMock()
+    fake_mlflow.get_run.side_effect = RuntimeError("Run 'stale-run-id' not found")
+    fake_mlflow.start_run.return_value = FakeRun()
+
+    fake_client = mock.MagicMock(spec=ModelClient)
+    fake_client.health_check.return_value = True
+    fake_client.chat_json.return_value = {"claims": {k: False for k in LAW_NAMES}}
+
+    cfg = BakeoffConfig(
+        model_name="qwen3-8b",
+        n_episodes=1,
+        seeds=[0],
+        checkpoint_path=str(ckpt),
+    )
+    with (
+        mock.patch("prometheus.bakeoff.runner._get_mlflow", return_value=fake_mlflow),
+        mock.patch.object(BakeoffRunner, "_make_client", return_value=fake_client),
+    ):
+        summary = BakeoffRunner(cfg).run()
+    assert summary.n_episodes == 1
+    assert fake_mlflow.start_run.call_args.kwargs.get("run_id") is None
+    assert json.loads(ckpt.read_text())["mlflow_run_id"] == "fresh-run-id"
+
+
+def test_vllm_flags_for_gpu_selects_bf16_on_l4_a100_g4_and_t4_fallback():
+    spec = MODEL_REGISTRY["qwen3-8b"]
+    t4_flags = vllm_flags_for_gpu(spec, compute_cap=(7, 5), vram_gb=15.0)
+    assert "--quantization" in t4_flags and "bitsandbytes" in t4_flags
+
+    l4_flags = vllm_flags_for_gpu(spec, compute_cap=(8, 9), vram_gb=24.0)
+    assert "--dtype" in l4_flags and "bfloat16" in l4_flags
+    assert "bitsandbytes" not in l4_flags
+
+    pinned = ModelSpec(
+        name="pinned-test",
+        hf_id="Qwen/Qwen3-8B",
+        revision="abc123def456",
+        vllm_flags=("--dtype", "half"),
+        bf16_vllm_flags=("--dtype", "bfloat16"),
+    )
+    flags_pinned = vllm_flags_for_gpu(pinned, compute_cap=(8, 0), vram_gb=40.0)
+    assert flags_pinned == ("--dtype", "bfloat16", "--revision", "abc123def456")
+
 

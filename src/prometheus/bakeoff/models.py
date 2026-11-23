@@ -34,12 +34,16 @@ class ModelSpec:
     # HF commit hash to pin for reproducibility.  ``None`` = float to HEAD
     # during scanning; must be pinned before a production run.
     revision: str | None
-    # Extra flags for ``vllm serve`` (list of strings, appended verbatim).
+    # Extra flags for ``vllm serve`` on T4 (15 GB, SM75) — backwards-compatible default.
     vllm_flags: tuple[str, ...] = field(default_factory=tuple)
+    # Extra flags for ``vllm serve`` on L4 / A100 / G4 (>=20 GB, SM>=8.0, native BF16).
+    bf16_vllm_flags: tuple[str, ...] = field(default_factory=tuple)
     # Extra body parameters sent with every chat-completions request.
     extra_body: dict[str, Any] = field(default_factory=dict)
     # Does this model fit on a single free Colab T4 (≤15 GB VRAM)?
     t4_feasible: bool = True
+    # Recommended max_tokens for bake-off completions (higher for reasoning models).
+    default_max_tokens: int = 2048
     # Short rationale / notes.
     notes: str = ""
 
@@ -54,22 +58,28 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
             "--max-model-len", "4096",
             "--gpu-memory-utilization", "0.90",
             # T4 (Turing SM75, 15 GB) lacks native BF16 and cannot hold ~16.4 GB
-            # FP16 weights + KV cache; use FP16 compute with 4-bit bitsandbytes
-            # (or switch to --dtype bfloat16 without quantization on L4/A100).
+            # FP16 weights + KV cache; use FP16 compute with 4-bit bitsandbytes.
             "--dtype", "half",
             "--quantization", "bitsandbytes",
             "--load-format", "bitsandbytes",
         ),
+        bf16_vllm_flags=(
+            "--max-model-len", "4096",
+            "--gpu-memory-utilization", "0.90",
+            "--dtype", "bfloat16",
+            "--enforce-eager",
+        ),
         # Disable thinking mode for classification tasks (faster, cheaper).
         extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         t4_feasible=True,
+        default_max_tokens=2048,
         notes=(
-            "Primary cortex candidate. 8B dense, ~16.4 GB FP16 / ~5.5 GB 4-bit. "
-            "Requires 4-bit quantization + --dtype half on T4 (15 GB, SM75); "
-            "runs unquantized BF16 on L4/A100. Strong reasoning, Apache 2.0."
+            "Primary cortex candidate. 8B dense, ~16.4 GB BF16 / ~5.5 GB 4-bit. "
+            "Runs unquantized BF16 on L4/A100/G4; 4-bit bitsandbytes on T4. "
+            "Strong reasoning, Apache 2.0."
         ),
     ),
-    # ── T4 fallback / larger MoE cortex ──────────────────────────────────
+    # ── MoE reasoning cortex ─────────────────────────────────────────────
     "gpt-oss-20b": ModelSpec(
         name="gpt-oss-20b",
         hf_id="openai/gpt-oss-20b",
@@ -78,34 +88,105 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
             "--max-model-len", "4096",
             "--gpu-memory-utilization", "0.92",
             "--dtype", "half",
+            "--enforce-eager",
+            "--reasoning-parser", "openai_gptoss",
+        ),
+        bf16_vllm_flags=(
+            "--max-model-len", "8192",
+            "--gpu-memory-utilization", "0.90",
+            "--enforce-eager",
+            "--reasoning-parser", "openai_gptoss",
         ),
         extra_body={},
         t4_feasible=True,
+        default_max_tokens=4096,
         notes=(
-            "20B MoE (~13.8 GB MXFP4 weights). Tight on T4 15 GB and MXFP4 "
-            "kernels prefer Hopper/Blackwell (L4/A100 recommended if T4 OOMs "
-            "or lacks Marlin fallback). Apache 2.0. Requires vLLM >= 0.9."
+            "20B MoE (~13.8 GB native MXFP4 weights). Recommended on L4/A100/G4 "
+            "(tight on T4 15 GB). Uses Harmony reasoning parser. Apache 2.0."
         ),
     ),
-    # ── Alternative cortex ───────────────────────────────────────────────
+    # ── Compact Gemma 4 alternative cortex ───────────────────────────────
     "gemma4-4b": ModelSpec(
         name="gemma4-4b",
-        hf_id="google/gemma-4-4b-it",
+        hf_id="google/gemma-4-E4B-it",
         revision=None,
         vllm_flags=(
             "--max-model-len", "4096",
             "--gpu-memory-utilization", "0.90",
             # T4 (SM75) does not support BF16; --dtype half avoids vLLM startup failure.
             "--dtype", "half",
+            "--enforce-eager",
+            "--reasoning-parser", "gemma4",
+        ),
+        bf16_vllm_flags=(
+            "--max-model-len", "4096",
+            "--gpu-memory-utilization", "0.90",
+            "--dtype", "bfloat16",
+            "--enforce-eager",
+            "--reasoning-parser", "gemma4",
         ),
         extra_body={},
         t4_feasible=True,
+        default_max_tokens=4096,
         notes=(
-            "Lightweight alternative. 4B dense (~8 GB FP16), easily fits T4 "
-            "with --dtype half. Apache 2.0 (Gemma Terms). Lower capacity but fast."
+            "Gemma 4 E4B instruction-tuned (~8B total with per-layer embeddings). "
+            "Fits T4/L4/A100/G4. Note: gated on HF (set HF_TOKEN in Colab Secrets)."
         ),
     ),
-    # ── Prover candidate (reference only; not evaluated in law classification) ──
+    # ── Pro-GPU larger Gemma 4 candidates (L4/A100/G4 only) ──────────────
+    "gemma4-26b-a4b": ModelSpec(
+        name="gemma4-26b-a4b",
+        hf_id="google/gemma-4-26B-A4B-it",
+        revision=None,
+        vllm_flags=(
+            "--max-model-len", "4096",
+            "--gpu-memory-utilization", "0.90",
+            "--dtype", "bfloat16",
+            "--enforce-eager",
+            "--reasoning-parser", "gemma4",
+        ),
+        bf16_vllm_flags=(
+            "--max-model-len", "8192",
+            "--gpu-memory-utilization", "0.90",
+            "--dtype", "bfloat16",
+            "--enforce-eager",
+            "--reasoning-parser", "gemma4",
+        ),
+        extra_body={},
+        t4_feasible=False,
+        default_max_tokens=4096,
+        notes=(
+            "Gemma 4 26B-A4B MoE (4B active params). Needs A100 (80 GB) or G4 (96 GB) "
+            "in BF16. Gated on HF (set HF_TOKEN)."
+        ),
+    ),
+    "gemma4-31b": ModelSpec(
+        name="gemma4-31b",
+        hf_id="google/gemma-4-31B-it",
+        revision=None,
+        vllm_flags=(
+            "--max-model-len", "4096",
+            "--gpu-memory-utilization", "0.90",
+            "--dtype", "bfloat16",
+            "--enforce-eager",
+            "--reasoning-parser", "gemma4",
+        ),
+        bf16_vllm_flags=(
+            "--max-model-len", "8192",
+            "--gpu-memory-utilization", "0.90",
+            "--dtype", "bfloat16",
+            "--enforce-eager",
+            "--reasoning-parser", "gemma4",
+        ),
+        extra_body={},
+        t4_feasible=False,
+        default_max_tokens=4096,
+        notes=(
+            "Gemma 4 31B dense (design-doc alternative). Needs A100 (80 GB) or "
+            "G4 (96 GB) in BF16. Gated on HF (set HF_TOKEN)."
+        ),
+    ),
+    # ── Prover candidate (Phase 0 step 5b) ───────────────────────────────
     "goedel-prover-v2-8b": ModelSpec(
         name="goedel-prover-v2-8b",
         hf_id="Goedel-LM/Goedel-Prover-V2-8B",
@@ -117,15 +198,43 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
             "--quantization", "bitsandbytes",
             "--load-format", "bitsandbytes",
         ),
+        bf16_vllm_flags=(
+            "--max-model-len", "8192",
+            "--gpu-memory-utilization", "0.90",
+            "--dtype", "bfloat16",
+            "--enforce-eager",
+        ),
         extra_body={},
         t4_feasible=True,
+        default_max_tokens=4096,
         notes=(
-            "Lean 4 prover role (Phase 0 step 5b, separate evaluation). "
-            "84.6% pass@32 on MiniF2F; note trained on Lean 4.9. "
-            "Needs 4-bit quantization on T4 (15 GB) or L4/A100 for BF16."
+            "Lean 4 prover role (Phase 0 step 5b). 84.6% pass@32 on MiniF2F "
+            "(trained on Lean 4.9). Unquantized BF16 on L4/A100/G4; 4-bit on T4."
         ),
     ),
 }
 
-# Ordered list for the bake-off: cortex candidates only.
+# Ordered list for the baseline T4-feasible cortex bake-off.
 BAKEOFF_MODELS: tuple[str, ...] = ("qwen3-8b", "gpt-oss-20b", "gemma4-4b")
+
+
+def vllm_flags_for_gpu(
+    spec: ModelSpec,
+    *,
+    compute_cap: tuple[int, int] | None = None,
+    vram_gb: float | None = None,
+) -> tuple[str, ...]:
+    """Choose GPU-appropriate vLLM flags (BF16 on L4/A100/G4, T4 fallback otherwise).
+
+    Automatically appends ``--revision <hash>`` when ``spec.revision`` is pinned.
+    """
+    use_bf16 = (
+        bool(spec.bf16_vllm_flags)
+        and compute_cap is not None
+        and compute_cap >= (8, 0)
+        and (vram_gb is None or vram_gb >= 20.0)
+    )
+    flags = list(spec.bf16_vllm_flags if use_bf16 else spec.vllm_flags)
+    if spec.revision:
+        flags.extend(["--revision", spec.revision])
+    return tuple(flags)

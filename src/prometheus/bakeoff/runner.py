@@ -33,7 +33,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..harness.client import ModelClient
+from ..harness.client import ModelClient, ModelClientError
 from ..harness.episode import EpisodeResult, run_episode
 from ..lab.laws import LAW_NAMES
 from ..lab.world import HiddenLawWorld
@@ -80,6 +80,8 @@ class BakeoffConfig:
     mlflow_experiment: str = "phase0-bakeoff"
     # Checkpoint path (Drive path on Colab)
     checkpoint_path: str | None = None
+    # Verify vLLM is reachable & serving this model before starting episodes
+    check_health: bool = True
 
     def __post_init__(self) -> None:
         if self.seeds is None:
@@ -202,6 +204,15 @@ class BakeoffRunner:
             {"model_name": cfg.model_name, "next_episode": 0, "results": {}}
         )
 
+        # Pre-flight server check so a down/wrong vLLM never poisons a checkpoint
+        if cfg.check_health and state["next_episode"] < cfg.n_episodes:
+            if not client.health_check():
+                raise ModelClientError(
+                    f"vLLM server at {cfg.vllm_base_url} failed health check for "
+                    f"model {self.spec.hf_id!r}. Start vLLM and verify /v1/models "
+                    "before running the bake-off."
+                )
+
         # MLflow setup
         mlflow = _get_mlflow()
         mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
@@ -222,7 +233,12 @@ class BakeoffRunner:
         run_kwargs: dict[str, Any] = {"run_name": cfg.model_name, "tags": run_tags}
         resumed_run_id = state.get("mlflow_run_id")
         if resumed_run_id:
-            run_kwargs = {"run_id": resumed_run_id}
+            try:
+                mlflow.get_run(resumed_run_id)
+                run_kwargs = {"run_id": resumed_run_id}
+            except Exception:
+                # Local MLflow DB snapshot predated the first run write; start fresh.
+                resumed_run_id = None
 
         with mlflow.start_run(**run_kwargs) as active_run:
             if not resumed_run_id:
