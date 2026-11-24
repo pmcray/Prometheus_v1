@@ -602,6 +602,8 @@ def test_vllm_flags_for_gpu_selects_bf16_on_l4_a100_g4_and_t4_fallback():
     l4_flags = vllm_flags_for_gpu(spec, compute_cap=(8, 9), vram_gb=24.0)
     assert "--dtype" in l4_flags and "bfloat16" in l4_flags
     assert "bitsandbytes" not in l4_flags
+    assert spec.revision == "b968826d9c46dd6066d109eabc6255188de91218"
+    assert "--revision" in l4_flags and spec.revision in l4_flags
 
     pinned = ModelSpec(
         name="pinned-test",

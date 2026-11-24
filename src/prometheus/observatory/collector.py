@@ -328,9 +328,47 @@ def collect_snapshot(
             pass
 
     logs_dir = ex / "logs"
+    cognitive_records: list[dict[str, Any]] = []
     if logs_dir.is_dir():
         for p in sorted(logs_dir.glob("*.jsonl")):
             logs.append(_inspect_log(p, f"exchange/logs/{p.name}"))
+            try:
+                for rec in read_log(p):
+                    if rec.get("kind") == "cognitive_episode" and isinstance(rec.get("payload"), dict):
+                        cognitive_records.append(rec["payload"])
+            except (OSError, json.JSONDecodeError):
+                pass
+
+    # Phase 1 optional cognitive telemetry (memory_state.json + cognitive_episode logs)
+    mem_raw = _safe_read_json(ex / "memory_state.json")
+    memory_summary: dict[str, Any] | None = None
+    if isinstance(mem_raw, dict) and isinstance(mem_raw.get("assemblies"), list):
+        asms = mem_raw["assemblies"]
+        saliences = [float(a.get("salience", 0.0)) for a in asms if isinstance(a, dict)]
+        memory_summary = {
+            "n_assemblies": len(asms),
+            "episodes_consolidated": int(mem_raw.get("episodes_consolidated", 0)),
+            "mean_salience": round(sum(saliences) / len(saliences), 3) if saliences else 0.0,
+        }
+
+    cognitive_summary: dict[str, Any] | None = None
+    if cognitive_records:
+        n_cog = len(cognitive_records)
+        cognitive_summary = {
+            "episodes": n_cog,
+            "mean_budget_spent": round(
+                sum(float(r.get("budget_spent", 0.0)) for r in cognitive_records) / n_cog, 2
+            ),
+            "mean_entropy_bits": round(
+                sum(float(r.get("final_entropy_bits", 0.0)) for r in cognitive_records) / n_cog, 3
+            ),
+            "mean_mdl_gain_bits": round(
+                sum(float(r.get("mdl_compression_bits", 0.0)) for r in cognitive_records) / n_cog, 3
+            ),
+            "early_stop_rate": round(
+                sum(1 for r in cognitive_records if r.get("stopped_early")) / n_cog, 3
+            ),
+        }
 
     # Checkpoint progress
     cp_raw = _safe_read_json(ex / "checkpoint.json")
@@ -380,4 +418,6 @@ def collect_snapshot(
         "checkpoint": checkpoint,
         "bakeoff": bakeoff,
         "mlflow_runs": mlflow_runs,
+        "memory": memory_summary,
+        "cognitive": cognitive_summary,
     }

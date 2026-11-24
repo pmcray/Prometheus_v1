@@ -8,7 +8,7 @@ self-improvement loop kept under control by a governor the agent cannot modify.
 
 Design document: *Prometheus v1 Demonstrator: Design and Roadmap* (Claude Docs).
 
-## Status: Phase 0 complete (code & local verification; Colab GPU bake-off ready)
+## Status: Phase 1 Cognitive Core complete (`v0.2.0`); Phase 0 Colab round-trip & baseline verified
 
 | Component | State | Where |
 | --- | --- | --- |
@@ -16,17 +16,26 @@ Design document: *Prometheus v1 Demonstrator: Design and Roadmap* (Claude Docs).
 | Variant bundles (content-hashed harness changes) | Done, tested | `src/prometheus/common/variant.py` |
 | Governor: Ed25519 keys, signed approvals & heartbeats, file locking | Done, tested | `src/prometheus/governor/` |
 | Governor: fixed rules, audit scoring, proxy-gain check, kill switch | Done, tested | `governor/rules.py`, `governor/service.py` |
-| Governor CLI, systemd units, rclone two-way copy script | Done; active on workstation | `governor/cli.py`, `deploy/` |
-| Colab-side gate (heartbeat check, verified atomic install, persistent state) | Done, tested | `src/prometheus/runtime/gate.py` |
+| Governor CLI, systemd units, rclone two-way copy script | Done; deployed on workstation | `governor/cli.py`, `deploy/` |
+| Colab-side gate (heartbeat check, verified atomic install, persistent state) | Done, live Drive round-trip verified (`g1c`, gen 1) | `src/prometheus/runtime/gate.py` |
 | Sandbox for agent-written code (AST + audit hook + rlimits + pipe IPC) | Done, tested | `src/prometheus/runtime/sandbox.py` |
 | Hidden-Law Lab world generator, 8 laws, law shift | Done, tested | `src/prometheus/lab/` |
 | Lean 4 ground-truth statement & `decide` proof layer | Done, **1,000 worlds verified** (`v4.34.1`) | `src/prometheus/lab/lean_layer.py`, `lean/verified_1000_worlds.json` |
-| Resumable Colab runtime template | Done (ready for Colab GPU run) | `colab/prometheus_runtime.ipynb` |
-| Foundation-model & prover bake-off harness + runner | Done, unit-tested (ready for Colab GPU) | `src/prometheus/harness/`, `src/prometheus/bakeoff/` |
-| Observatory dashboard (read-only web UI + JSON API + CLI) | Done, tested | `src/prometheus/observatory/` |
-| Cognitive core (Friston EFE, Good MDL/memory, Hofstadter transfer) | Next (Phase 1+) | — |
+| Resumable Colab runtime notebook (Phase 0 + Phase 1) | Done, tested on Colab GPU | `colab/prometheus_runtime.ipynb` |
+| Foundation-model & prover bake-off harness + runner | Done; `qwen3-8b` pinned (`b968826d…`) | `src/prometheus/harness/`, `src/prometheus/bakeoff/` |
+| Observatory dashboard (read-only web UI + JSON API + Phase 1 cards) | Done, tested | `src/prometheus/observatory/` |
+| Cognitive core (Markov blanket, Friston EFE, Good MDL memory, hybrid LLM advisor, harness loader) | Done, tested (**99.69%** on 200 worlds; **100.0%** on audit 1000–1049) | `src/prometheus/core/` |
+| Analogy transfer & Ashby ultrastability loop | Next (Phase 2+) | `src/prometheus/core/interfaces.py` (seams ready) |
 
-Run `pytest -q` for the full suite, or `pytest -q -k redteam` for the governor/gate/sandbox/prover red-team checks.
+### Phase 0 vs Phase 1 Benchmark (`seeds 0–199`, `noise=0.05`, `budget=500.0`)
+
+| System | 200-World Accuracy | Associativity | Mean Budget / 500 | Early-Stop | Audit `1000–1049` |
+| --- | --- | --- | --- | --- | --- |
+| Majority-vote floor | ~66.0% | — | — | — | 44.0%–56.0% |
+| Phase 0 raw `Qwen/Qwen3-8B` (Colab GPU) | 63.94% | 30.0% | ~150+ (3-pass) | 0% | — |
+| Phase 1 `CognitiveAgent` (EFE + MDL memory) | **99.69%** (1595/1600) | **99.0%** | **36.59** | **98.0%** | **100.00%** (read-only memory) |
+
+Run `pytest -q` for the full suite, or `pytest -q -k redteam` for the governor/gate/sandbox/core/prover red-team checks.
 
 ## Layout
 
@@ -36,11 +45,12 @@ src/prometheus/
   governor/     runs on the workstation only: keys, tokens, policy, rules, service, CLI
   runtime/      runs on Colab: cryptographic gate + hardened subprocess sandbox
   lab/          Hidden-Law Lab: planted algebraic worlds, law catalogue, audit, Lean 4 layer
-  harness/      model client (vLLM OpenAI API), prompts, episode & prover runners
-  bakeoff/      candidate model registry + resumable MLflow bake-off runner
+  core/         protected Phase 1 cognitive core: Markov blanket, EFE, MDL memory, harness loader, agent
+  harness/      model client (vLLM OpenAI API), prompts/advisor, episode & prover runners
+  bakeoff/      candidate model registry (GPU-aware vLLM flags) + resumable MLflow runner
   observatory/  local read-only workstation dashboard (HTML + /api/snapshot + CLI)
 lean/           pinned Lean 4 toolchain, Mathlib manifest, and 1,000-world proof certificate
-colab/          resumable Colab runtime + bake-off notebook template
+colab/          resumable Colab runtime + Phase 1 cognitive + bake-off notebook
 tests/          pytest suite (red-team cases named test_redteam_*)
 deploy/         systemd units and rclone two-way copy script for the governor workstation
 ```

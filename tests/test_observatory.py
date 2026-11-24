@@ -48,9 +48,17 @@ def test_collector_full_run_and_leaderboard(setup):
     make_proposal(ex, "pending-g2", generation=2, parent=s["gate"].installed_hash,
                   claims_obj=claims(8))
 
-    # Runtime agent event log on exchange
+    # Runtime agent event log on exchange (including Phase 1 cognitive telemetry)
     agent_log = EventLog(ex / "logs" / "agent.jsonl", clock=s["clock"])
     agent_log.append("episode", {"seed": 0, "correct": 7})
+    agent_log.append("cognitive_episode", {
+        "seed": 0, "budget_spent": 42.5, "final_entropy_bits": 0.08,
+        "mdl_compression_bits": 2.4, "stopped_early": True,
+    })
+    (ex / "memory_state.json").write_text(json.dumps({
+        "episodes_consolidated": 5,
+        "assemblies": [{"assembly_id": "asm-001", "salience": 0.92}],
+    }))
 
     # Runtime checkpoint + two bake-off checkpoints
     w0 = HiddenLawWorld(seed=0)
@@ -104,6 +112,9 @@ def test_collector_full_run_and_leaderboard(setup):
     assert "Prometheus v1 Observatory" in html_doc
     assert "HEALTHY" in html_doc
     assert "qwen3-8b" in html_doc
+    assert "Cognitive Core &amp; MDL Memory" in html_doc
+    assert "42.5" in html_doc
+    assert "1 / 5" in html_doc
 
 
 def test_collector_detects_corrupted_log_and_halted_state(setup):

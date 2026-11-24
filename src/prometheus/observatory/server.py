@@ -44,6 +44,8 @@ def render_dashboard_html(snap: dict[str, Any]) -> str:
     hb = snap.get("heartbeat") or {}
     st = snap.get("state") or {}
     pol = snap.get("policy") or {}
+    cog = snap.get("cognitive") or {}
+    mem = snap.get("memory") or {}
 
     run_id = hb.get("run_id") or pol.get("run_id") or "—"
     gen_str = (
@@ -190,6 +192,16 @@ def render_dashboard_html(snap: dict[str, Any]) -> str:
       <div class="kv"><span class="muted">Accuracy</span><span>{_fmt_pct(cp['accuracy'] if cp else None)}</span></div>
       <div class="kv"><span class="muted">Budget spent</span><span>{_esc(cp['total_spent'] if cp else '—')}</span></div>
       <div class="kv"><span class="muted">Pending proposals</span><span>{len(pending)}</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Cognitive Core &amp; MDL Memory</h2>
+      <div class="kv"><span class="muted">Cognitive episodes</span><span>{_esc(cog.get('episodes', '—'))}</span></div>
+      <div class="kv"><span class="muted">Mean budget / ep</span><span>{_esc(cog.get('mean_budget_spent', '—'))}</span></div>
+      <div class="kv"><span class="muted">Mean entropy (bits)</span><span>{_esc(cog.get('mean_entropy_bits', '—'))}</span></div>
+      <div class="kv"><span class="muted">Early-stop rate</span><span>{_fmt_pct(cog.get('early_stop_rate'))}</span></div>
+      <div class="kv"><span class="muted">Mean MDL gain (bits)</span><span>{_esc(cog.get('mean_mdl_gain_bits', '—'))}</span></div>
+      <div class="kv"><span class="muted">Assemblies / consolidated</span><span>{_esc(mem.get('n_assemblies', '—'))} / {_esc(mem.get('episodes_consolidated', '—'))}</span></div>
     </div>
   </div>
 

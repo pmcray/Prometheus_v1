@@ -53,7 +53,7 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
     "qwen3-8b": ModelSpec(
         name="qwen3-8b",
         hf_id="Qwen/Qwen3-8B",
-        revision=None,   # pin to HEAD during scan; pin hash after winner chosen
+        revision="b968826d9c46dd6066d109eabc6255188de91218",  # pinned from Phase 0 Colab bake-off (2026-11-23)
         vllm_flags=(
             "--max-model-len", "4096",
             "--gpu-memory-utilization", "0.90",

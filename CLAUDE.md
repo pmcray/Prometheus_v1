@@ -46,41 +46,44 @@ says otherwise.
 ## Commands
 ```bash
 python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
-pytest -q                     # 196 tests (including live Lean 4 compilation)
-pytest -q -k redteam          # governor, gate, sandbox & prover red-team set (88 cases)
+pytest -q                     # 228 tests (including live Lean 4 compilation + Phase 1 core)
+pytest -q -k redteam          # governor, gate, sandbox, core & prover red-team set
 prometheus-governor --help
 prometheus-observatory --help
 prometheus-verify-worlds --help
 ```
 
-## Where things stand (Phase 0, which runs to 27 Nov 2026)
-Done (code, tests, and local workstation deployment):
+## Where things stand (`v0.2.0` — Phase 0 live-verified, Phase 1 Cognitive Core complete)
+Done (code, tests, workstation deployment, and live Colab Phase 0 verification):
 - Audit log, variant bundles, governor (keys, signed approvals/heartbeats, file locking,
   rules, audit scoring, proxy-gain check, kill switch, CLI), and Colab-side gate with
-  persistent Drive state.
-- Workstation deployment: `governor` user, `prometheus-governor.service` (active, network
-  denied), `rclone-sync.timer` / `rclone-sync.service` syncing with Google Drive.
+  persistent Drive state (`INSTALL_ROOT` on local ext4 `/content/installed_harness`).
+- Live Colab Phase 0 verification: `g1c` signed approval & install round-trip (`generation=1`),
+  forced runtime restart recovery, governor-stop halt check, and 200-episode `qwen3-8b` baseline
+  (63.94% raw LLM accuracy; pinned at `b968826d9c46dd6066d109eabc6255188de91218` in `models.py`).
+- Workstation deployment: `governor` user, `prometheus-governor.service` (network denied),
+  `rclone-sync.timer` / `rclone-sync.service` syncing with Google Drive.
   Confirm with Paul before any `sudo` step when updating deployed units/venv.
 - Hidden-Law Lab v0 + Lean 4 ground-truth statement & `decide` proof layer (`v4.34.1`
   pinned in `lean/PrometheusLaws/`, 1,000 worlds verified in `lean/verified_1000_worlds.json`).
 - Hardened subprocess sandbox (`python -I`, AST screen, import allowlist, audit hook,
   rlimits, dedicated result pipe).
-- Resumable Colab runtime + bake-off notebook (`colab/prometheus_runtime.ipynb`),
-  cortex & Lean 4 prover harnesses (`src/prometheus/harness/`), and MLflow bake-off runner.
-- Local read-only Observatory dashboard (`src/prometheus/observatory/`).
-- Local Phase 0 end-to-end test (`tests/test_phase0_e2e.py`).
+- **Phase 1 Cognitive Core (`src/prometheus/core/`):** immutable Markov blanket (`RestrictedWorld`,
+  `EssentialBounds`), pure-Python `ExactBayesianBackend` (120 consistent law profiles, incremental
+  Friston EFE, forgetting factor), Good's MDL `AssemblyMemory` (probabilistic prior regeneration,
+  atomic Drive checkpointing), strict immutable→mutable `harness/` loader, and hybrid
+  `CognitiveAgent` (99.69% accuracy on seeds 0–199 with 36.59 mean budget; 100.0% on frozen audit
+  seeds 1000–1049 in read-only memory mode; 5.130 bits mean MDL gain).
+- Resumable Colab runtime notebook (`colab/prometheus_runtime.ipynb`) wired for Phase 1
+  `CognitiveAgent`, hybrid Qwen3-8B advisor, Phase 1 audit evaluation, and `g2` proposal.
+- Local read-only Observatory dashboard (`src/prometheus/observatory/`) with Phase 1 memory &
+  cognitive telemetry cards and JSON API.
 
-Remaining for Phase 0 exit:
-1. Run `colab/prometheus_runtime.ipynb` on a Colab GPU: live Drive approval/heartbeat
-   round trip, forced runtime restart confirmation, and 200-episode foundation-model
-   cortex bake-off (`qwen3-8b`, `gpt-oss-20b`, `gemma4-4b`).
-2. Prover bake-off (step 5b) and Lean toolchain alignment (pin Lean 4.9 if selecting
-   `Goedel-Prover-V2-8B`), then pin winning Hugging Face commit hashes in
-   `src/prometheus/bakeoff/models.py` and the workstation `policy.json`.
-
-Next after Phase 0: Phase 1+ cognitive core (Friston EFE, Good MDL/memory, Hofstadter transfer).
-
-Phase 0 exit criteria: governor running here blocks 100% of the starter red-team set;
-Drive approval/heartbeat round trip works and stopping the governor halts a live run;
-1,000 worlds with verified ground-truth proofs; prover and foundation model chosen;
-a run survives a forced runtime restart without losing state.
+Optional follow-ups / Next (Phase 2+):
+1. Run Phase 1 `CognitiveAgent` (Cell 4 → Cell 4c → Cell 5 → Cell 6 `g2`) on Colab and verify
+   `g2` approval (`~1.000` audit score) + Observatory cognitive telemetry.
+2. Optional deferred prover bake-off: run `goedel-prover-v2-8b` in Cell 4d (and align Lean 4.9 if
+   selected), plus pin `model_pins` in workstation `policy.json` when starting `run-002`.
+3. Phase 2+: Hofstadter structural analogy / cross-world transfer (`AnalogyTransferAdapter`),
+   Ashby ultrastability monitor (`UltrastabilityMonitor`) driving bounded harness-mutation
+   proposals, and law-shift adaptation benchmarks.
