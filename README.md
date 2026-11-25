@@ -8,7 +8,7 @@ self-improvement loop kept under control by a governor the agent cannot modify.
 
 Design document: *Prometheus v1 Demonstrator: Design and Roadmap* (Claude Docs).
 
-## Status: Phase 2 Hofstadter Transfer & Ashby Ultrastability complete (`v0.3.0`); Phase 1 live-verified on Colab (`g2`, 99.69%)
+## Status: Phase 3 complete (`v0.4.0`); Phase 0, 1 & 2 live-verified on Colab (`g3b` gen 3)
 
 | Component | State | Where |
 | --- | --- | --- |
@@ -16,17 +16,17 @@ Design document: *Prometheus v1 Demonstrator: Design and Roadmap* (Claude Docs).
 | Variant bundles (content-hashed harness changes) | Done, tested | `src/prometheus/common/variant.py` |
 | Governor: Ed25519 keys, signed approvals & heartbeats, file locking | Done, tested | `src/prometheus/governor/` |
 | Governor: fixed rules, audit scoring, proxy-gain check, kill switch | Done, tested | `governor/rules.py`, `governor/service.py` |
-| Governor CLI, systemd units, rclone two-way copy script | Done; deployed on workstation | `governor/cli.py`, `deploy/` |
-| Colab-side gate (heartbeat check, verified atomic install, persistent state) | Done; live Drive round-trip verified (`g1c` gen 1, `g2` gen 2) | `src/prometheus/runtime/gate.py` |
+| Governor CLI, systemd units, rclone two-way copy & `run-002` bootstrap | Done; deployed on workstation | `governor/cli.py`, `deploy/` |
+| Colab-side gate (heartbeat check, verified atomic install, persistent state) | Done; live Drive round-trip verified (`g1c` gen 1, `g2` gen 2, `g3b` gen 3) | `src/prometheus/runtime/gate.py` |
 | Sandbox for agent-written code (AST + audit hook + rlimits + pipe IPC) | Done, tested | `src/prometheus/runtime/sandbox.py` |
 | Hidden-Law Lab world generator, 8 laws, law shift | Done, tested | `src/prometheus/lab/` |
-| Lean 4 ground-truth statement & `decide` proof layer | Done, **1,000 worlds verified** (`v4.34.1`) | `src/prometheus/lab/lean_layer.py`, `lean/verified_1000_worlds.json` |
-| Resumable Colab runtime notebook (Phase 0 + Phase 1 + Phase 2 Ashby loop) | Done, tested on Colab GPU | `colab/prometheus_runtime.ipynb` |
-| Foundation-model & prover bake-off harness + runner | Done; `qwen3-8b` pinned (`b968826d…`) | `src/prometheus/harness/`, `src/prometheus/bakeoff/` |
-| Observatory dashboard (read-only web UI + JSON API + Phase 1/2 cards) | Done, tested | `src/prometheus/observatory/` |
+| Lean 4 ground-truth statement & `decide` proof layer + Lean 4.9 prover project | Done, **1,000 worlds verified** (`v4.34.1`) + isolated `v4.9.0` project | `src/prometheus/lab/lean_layer.py`, `lean/PrometheusProver49/` |
+| Resumable Colab runtime notebook (Phases 0–3: Cells 4–4g) | Done, tested on Colab GPU | `colab/prometheus_runtime.ipynb` |
+| Foundation-model & Lean 4.9 `pass@k` prover bake-off harness + runners | Done; `qwen3-8b` pinned (`b968826d…`), `goedel-prover-v2-8b` wired | `src/prometheus/harness/`, `src/prometheus/bakeoff/` |
+| Observatory dashboard (read-only web UI + JSON API + Phase 1/2/3 cards) | Done, live-verified | `src/prometheus/observatory/` |
 | Phase 1 Cognitive core (Markov blanket, Friston EFE, Good MDL memory, hybrid LLM advisor, harness loader) | Done, **live-verified on Colab** (**99.69%** on 200 worlds; **100.0%** on audit `1000–1049`; `g2` approved) | `src/prometheus/core/` |
-| Phase 2 Hofstadter structural analogy transfer & Ashby ultrastability proposer | Done, tested (symbol-invariant transfer, surprise veto, immutable bounds, bounded Governor proposal loop) | `src/prometheus/core/transfer.py`, `src/prometheus/core/ashby.py` |
-| Phase 3 Law-shift stress tests, prover bake-off (`Goedel-Prover-V2-8B`), and multi-generation runs | Next (Phase 3) | — |
+| Phase 2 Hofstadter structural analogy transfer & Ashby ultrastability proposer | Done, **live-verified on Colab** (`g3` veto caught, `g3b` approved at gen 3, **2,601** hints) | `src/prometheus/core/transfer.py`, `src/prometheus/core/ashby.py` |
+| Phase 3 Law-shift stress recovery, Lean 4.9 `pass@k` prover bake-off & pinned multi-gen (`run-002`) | Done, tested (**52.1% → 100.0%** law-shift recovery; pinned `run-002` E2E verified) | `src/prometheus/core/law_shift.py`, `src/prometheus/bakeoff/prover_runner.py`, `src/prometheus/core/multigen.py` |
 
 ### Phase 0 vs Phase 1 Benchmark (`seeds 0–199`, `noise=0.05`, `budget=500.0`)
 

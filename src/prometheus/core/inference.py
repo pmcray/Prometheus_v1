@@ -337,6 +337,9 @@ class ExactBayesianBackend:
         self._f_q: list[list[float]] = []
         self._surprises: list[float] = []
         self._obs_count: int = 0
+        self._recent_confirmed_spikes: int = 0
+        self._last_global_decay_obs: int = -100
+        self.shift_decay_count: int = 0
 
     def reset(
         self,
@@ -372,6 +375,9 @@ class ExactBayesianBackend:
         self._f_q = [[u] * self._n for _ in range(self._n)]
         self._surprises = []
         self._obs_count = 0
+        self._recent_confirmed_spikes = 0
+        self._last_global_decay_obs = -100
+        self.shift_decay_count = 0
         self.set_prior(prior_joint if prior_joint is not None else UNIFORM_JOINT_PRIOR)
 
     def set_prior(self, prior_joint: tuple[float, ...]) -> None:
@@ -404,13 +410,73 @@ class ExactBayesianBackend:
         pm = self._p_miss
         return [pm + diff * qz for qz in q]
 
+    def decay_beliefs(self, factor: float) -> None:
+        """Globally soften all cell evidence counts by *factor* in ``[0, 1]`` and reset prior.
+
+        Used by adaptive (``forgetting_factor < 1.0``) backends upon detecting a
+        high Bayesian surprise spike (Phase 3 non-stationary law shift) so stale
+        pre-shift observations no longer suppress epistemic exploration.
+        """
+        f = min(max(float(factor), 0.0), 1.0)
+        n = self._n
+        for i in range(n):
+            for j in range(n):
+                if self._op_totals[i][j] > 0.0:
+                    counts = self._op_counts[i][j]
+                    for k in range(n):
+                        counts[k] *= f
+                    self._op_totals[i][j] *= f
+                    if self._op_totals[i][j] < 1e-6:
+                        self._op_totals[i][j] = 0.0
+                        for k in range(n):
+                            counts[k] = 0.0
+                    self._op_q[i][j] = self._cell_posterior_from_counts(
+                        counts, self._op_totals[i][j]
+                    )
+            if self._f_totals[i] > 0.0:
+                fcounts = self._f_counts[i]
+                for k in range(n):
+                    fcounts[k] *= f
+                self._f_totals[i] *= f
+                if self._f_totals[i] < 1e-6:
+                    self._f_totals[i] = 0.0
+                    for k in range(n):
+                        fcounts[k] = 0.0
+                self._f_q[i] = self._cell_posterior_from_counts(fcounts, self._f_totals[i])
+        self.set_prior(UNIFORM_JOINT_PRIOR)
+
+    def _maybe_global_shift_decay(self, gamma: float, prev_tot: float, surprise: float) -> None:
+        """Trigger a global belief decay only on repeated high-surprise mismatches.
+
+        A single 5% observation noise flip on a previously observed cell gives
+        ``surprise ~ 3.7-4.9`` nats and should NOT wipe the table.  A genuine
+        mid-episode law shift produces consecutive high-surprise mismatches on
+        previously observed cells; detecting >= 2 within a short window resets
+        stale pre-shift evidence cleanly (with a cooldown so post-shift learning
+        converges rapidly).
+        """
+        if gamma >= 1.0:
+            return
+        if prev_tot >= 0.8 and surprise > 3.0:
+            self._recent_confirmed_spikes += 1
+        else:
+            self._recent_confirmed_spikes = max(0, self._recent_confirmed_spikes - 1)
+
+        if self._recent_confirmed_spikes >= 2 and (self._obs_count - self._last_global_decay_obs) >= 12:
+            self.decay_beliefs(gamma ** 4)
+            self.shift_decay_count += 1
+            self._recent_confirmed_spikes = 0
+            self._last_global_decay_obs = self._obs_count
+
     def observe(self, action: ExperimentAction, result: str) -> float:
         y = self._index[result]
         gamma = self.params.forgetting_factor
         if action.kind == "combine":
             i, j = self._index[action.args[0]], self._index[action.args[1]]
+            prev_tot = self._op_totals[i][j]
             pred = self._p_miss + (self._p_hit - self._p_miss) * self._op_q[i][j][y]
             surprise = -math.log(max(pred, 1e-15))
+            self._maybe_global_shift_decay(gamma, prev_tot, surprise)
             counts = self._op_counts[i][j]
             if gamma < 1.0 and self._op_totals[i][j] > 0.0:
                 for k in range(self._n):
@@ -421,8 +487,10 @@ class ExactBayesianBackend:
             self._op_q[i][j] = self._cell_posterior_from_counts(counts, self._op_totals[i][j])
         else:
             i = self._index[action.args[0]]
+            prev_tot = self._f_totals[i]
             pred = self._p_miss + (self._p_hit - self._p_miss) * self._f_q[i][y]
             surprise = -math.log(max(pred, 1e-15))
+            self._maybe_global_shift_decay(gamma, prev_tot, surprise)
             counts = self._f_counts[i]
             if gamma < 1.0 and self._f_totals[i] > 0.0:
                 for k in range(self._n):

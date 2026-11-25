@@ -43,6 +43,10 @@ class ProverResult:
     proved: bool
     latency_s: float = 0.0
     error: str | None = None
+    attempts: int = 1
+    winning_attempt: int | None = None
+    error_kind: str | None = None
+    lean_compat: str = "4.34"
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
@@ -103,41 +107,88 @@ def validate_prover_source(target_template: str, candidate_source: str) -> str |
     return None
 
 
+def _classify_validation_error(reason: str) -> str:
+    if "forbidden proof primitive" in reason:
+        return "cheat_rejected"
+    return "statement_altered"
+
+
 def run_prover_episode(
     world: HiddenLawWorld,
     client: ModelClient,
     *,
     lean_timeout: int = 60,
+    lean_compat: str = "4.34",
+    project_dir: str | Any | None = None,
+    attempts: int = 1,
+    sample_temperature: float = 0.6,
 ) -> ProverResult:
-    """Run one Lean proof-generation episode against *client* and verify with Lean."""
-    template = world_lean_source(world, include_proofs=False)
+    """Run one Lean proof-generation episode against *client* and verify with Lean.
+
+    Supports ``pass@k`` via *attempts* (attempt 1 uses ``client.temperature``,
+    typically ``0.0``; subsequent attempts sample at *sample_temperature*).
+    Every attempt is validated through :func:`validate_prover_source` before Lean
+    verification; cheating primitives or altered theorems are always rejected.
+    """
+    n_attempts = max(1, int(attempts))
+    template = world_lean_source(world, include_proofs=False, lean_compat=lean_compat)
     messages = [
         {"role": "system", "content": PROVER_SYSTEM_PROMPT},
         {"role": "user", "content": template},
     ]
+
     t0 = time.monotonic()
+    last_error: str | None = None
+    last_kind: str | None = None
+    orig_temp = getattr(client, "temperature", 0.0)
+
     try:
-        raw = client.chat(messages)
-    except ModelClientError as exc:
-        return ProverResult(
-            seed=world.seed, family=world.family, proved=False,
-            latency_s=time.monotonic() - t0, error=str(exc),
-        )
-    latency = time.monotonic() - t0
-    candidate = _strip_lean_fences(raw)
+        for attempt in range(1, n_attempts + 1):
+            if attempt > 1 and hasattr(client, "temperature"):
+                client.temperature = sample_temperature
+            try:
+                raw = client.chat(messages)
+            except ModelClientError as exc:
+                last_error = str(exc)
+                last_kind = "client_error"
+                continue
 
-    reason = validate_prover_source(template, candidate)
-    if reason is not None:
-        return ProverResult(
-            seed=world.seed, family=world.family, proved=False,
-            latency_s=latency, error=reason,
-        )
+            candidate = _strip_lean_fences(raw)
+            reason = validate_prover_source(template, candidate)
+            if reason is not None:
+                last_error = reason
+                last_kind = _classify_validation_error(reason)
+                continue
 
-    ok, err = verify_lean_source(candidate, timeout=lean_timeout)
+            ok, err = verify_lean_source(
+                candidate, timeout=lean_timeout, project_dir=project_dir
+            )
+            if ok:
+                return ProverResult(
+                    seed=world.seed,
+                    family=world.family,
+                    proved=True,
+                    latency_s=time.monotonic() - t0,
+                    error=None,
+                    attempts=attempt,
+                    winning_attempt=attempt,
+                    error_kind=None,
+                    lean_compat=lean_compat,
+                )
+            last_error = err.strip()[:500]
+            last_kind = "lean_compile_error"
+    finally:
+        if hasattr(client, "temperature"):
+            client.temperature = orig_temp
+
     return ProverResult(
         seed=world.seed,
         family=world.family,
-        proved=ok,
-        latency_s=latency,
-        error=None if ok else err.strip()[:500],
+        proved=False,
+        latency_s=time.monotonic() - t0,
+        error=last_error,
+        attempts=n_attempts,
+        winning_attempt=None,
+        error_kind=last_kind,
+        lean_compat=lean_compat,
     )

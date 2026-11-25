@@ -422,6 +422,164 @@ class CognitiveAgent:
             ashby_violations=ashby_violations,
         )
 
+    def continue_episode(
+        self,
+        world: HiddenLawWorld | WorldView,
+        *,
+        sentinel_probes: int = 6,
+        max_steps: int | None = None,
+        learn: bool = False,
+        episode_idx: int = 0,
+    ) -> CognitiveEpisodeResult:
+        """Continue interacting with *world* WITHOUT resetting backend beliefs (Phase 3 law-shift).
+
+        Enforces the exact same Markov blanket (:class:`RestrictedWorld`): the
+        agent is never told whether a law shift occurred. It first executes up to
+        ``sentinel_probes`` monitoring queries across distinct cells (diagonal /
+        off-diagonal ``combine`` and ``transform`` probes) so any non-stationary
+        shift generates a live Bayesian surprise signal, then continues standard
+        Friston EFE active inference until convergence or budget exhaustion.
+        """
+        t0 = time.monotonic()
+        seed: int | None = world.seed if isinstance(world, HiddenLawWorld) else None
+        view: WorldView = RestrictedWorld(world) if isinstance(world, HiddenLawWorld) else world
+
+        symbols = view.symbols
+        n = len(symbols)
+        initial_budget = view.budget
+        spent_before = view.spent
+
+        # Deterministic sentinel probe schedule across the blanket (no ground truth)
+        sentinel_plan: list[ExperimentAction] = []
+        for i in range(n):
+            sentinel_plan.append(ExperimentAction("combine", (symbols[i], symbols[i]), view.combine_cost))
+        for i in range(n):
+            sentinel_plan.append(
+                ExperimentAction("combine", (symbols[i], symbols[(i + 1) % n]), view.combine_cost)
+            )
+        for i in range(n):
+            sentinel_plan.append(ExperimentAction("transform", (symbols[i],), view.transform_cost))
+
+        observations: list[Observation] = []
+        surprises: list[float] = []
+        transfer_hints = 0
+        transfer_source: str | None = None
+        transfer_confidence = 0.0
+        stopped_early = False
+        stop_reason = "max_steps"
+
+        mesh = self.harness.mesh
+        step_limit = max_steps if max_steps is not None else mesh.max_steps_per_episode
+        min_post_steps = min(max(0, sentinel_probes), len(sentinel_plan))
+
+        for step in range(step_limit):
+            scores = self.backend.score_actions(view.remaining)
+            if not scores:
+                stop_reason = "budget_exhausted"
+                break
+
+            if step >= min_post_steps:
+                should_stop, reason = self.backend.should_stop(scores)
+                if should_stop:
+                    stopped_early = reason != "budget_exhausted"
+                    stop_reason = reason
+                    break
+
+            cur_belief = self.backend.belief()
+            chosen: ExperimentAction | None = None
+
+            if step < min_post_steps:
+                cand = sentinel_plan[step]
+                if cand.cost <= view.remaining + 1e-9:
+                    chosen = cand
+
+            if chosen is None and self.transfer is not None:
+                hint = self.transfer.propose_transfer(
+                    cur_belief, observations, self.memory.assemblies
+                )
+                if hint is not None:
+                    if hint.prior_joint is not None:
+                        self.backend.set_prior(hint.prior_joint)
+                    if hint.source_assembly_id is not None and hint.confidence > 0.0:
+                        transfer_hints += 1
+                        if hint.confidence >= transfer_confidence:
+                            transfer_source = hint.source_assembly_id
+                            transfer_confidence = float(hint.confidence)
+                    legal = {_action_key(s.action): s.action for s in scores}
+                    for cand in hint.suggested_actions:
+                        if _action_key(cand) in legal:
+                            chosen = legal[_action_key(cand)]
+                            break
+
+            if chosen is None:
+                if isinstance(self.backend, ExactBayesianBackend):
+                    chosen = self.backend.select_action(scores, self._rng)
+                else:
+                    chosen = scores[0].action
+
+            try:
+                result_sym = chosen.execute(view)
+            except BudgetExhausted:
+                stop_reason = "budget_exhausted"
+                break
+
+            surp = self.backend.observe(chosen, result_sym)
+            surprises.append(surp)
+            observations.append(Observation(step=step, action=chosen, result=result_sym, surprise=surp))
+
+        final_belief = self.backend.belief()
+        final_features = self.backend.feature_summary()
+        recall_final = self.memory.recall(final_belief, final_features, n)
+        claims = dict(final_belief.map_claims)
+
+        mdl_gain = recall_final.compression_gain_bits
+        if learn:
+            report = self.memory.consolidate(
+                final_belief, final_features, n, episode_idx=episode_idx
+            )
+            mdl_gain = max(mdl_gain, report.compression_gain_bits)
+
+        mean_surp = (sum(surprises) / len(surprises)) if surprises else 0.0
+        max_surp = max(surprises) if surprises else 0.0
+        phase_spent = view.spent - spent_before
+        budget_frac = view.spent / initial_budget if initial_budget > 0 else 0.0
+        metrics = EssentialMetrics(
+            mean_confidence=final_belief.mean_confidence,
+            final_entropy_bits=final_belief.entropy_bits,
+            budget_spent=phase_spent,
+            budget_fraction=budget_frac,
+            observations_used=len(observations),
+            mean_surprise=mean_surp,
+            max_surprise=max_surp,
+            mdl_compression_bits=mdl_gain,
+        )
+
+        ashby_triggered = False
+        ashby_violations: list[str] = []
+        if self.monitor is not None:
+            ashby_triggered = bool(self.monitor.record(metrics))
+            ashby_violations = list(self.monitor.violations())
+
+        return CognitiveEpisodeResult(
+            seed=seed,
+            n=n,
+            claims=claims,
+            law_probs=dict(final_belief.law_probs),
+            observations_used=len(observations),
+            budget_spent=phase_spent,
+            final_entropy_bits=final_belief.entropy_bits,
+            metrics=metrics,
+            activated_assemblies=dict(recall_final.activations),
+            stopped_early=stopped_early,
+            stop_reason=stop_reason,
+            latency_s=time.monotonic() - t0,
+            transfer_hints=transfer_hints,
+            transfer_source=transfer_source,
+            transfer_confidence=round(transfer_confidence, 4),
+            ashby_triggered=ashby_triggered,
+            ashby_violations=ashby_violations,
+        )
+
     def evaluate_audit_seeds(
         self,
         seeds: Iterable[int],

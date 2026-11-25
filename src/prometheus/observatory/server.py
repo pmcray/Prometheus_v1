@@ -48,6 +48,8 @@ def render_dashboard_html(snap: dict[str, Any]) -> str:
     mem = snap.get("memory") or {}
     tr = snap.get("transfer") or {}
     ashby = snap.get("ashby") or {}
+    law_shift = snap.get("law_shift") or {}
+    multigen = snap.get("multigen") or {}
     ashby_status = ashby.get("status", "—")
     ashby_cls = "ok" if ashby_status == "HOMEOSTATIC" else ("warn" if ashby_status == "STRESSED" else "muted")
     ashby_reasons = ", ".join(ashby.get("active_reasons") or []) or "none"
@@ -117,6 +119,27 @@ def render_dashboard_html(snap: dict[str, Any]) -> str:
         )
     if not bakeoff_rows:
         bakeoff_rows.append('<tr><td colspan="5" class="muted">No bake-off checkpoints found.</td></tr>')
+
+    # Lean 4 prover bake-off leaderboard
+    prover_rows = []
+    for p_entry in (snap.get("prover_bakeoff") or []):
+        plat = f"{p_entry['mean_latency_s']:.2f}s" if p_entry.get("mean_latency_s") is not None else "—"
+        prover_rows.append(
+            "<tr>"
+            f"<td>{_esc(p_entry['model_name'])}</td>"
+            f"<td><code>{_esc(p_entry.get('lean_toolchain', '—'))}</code></td>"
+            f"<td>{_esc(p_entry.get('n_proved', 0))}/{_esc(p_entry.get('n_worlds', 0))} "
+            f"(pass@{_esc(p_entry.get('attempts_per_world', 1))})</td>"
+            f"<td>{_fmt_pct(p_entry.get('pass_rate'))} {_bar(p_entry.get('pass_rate'))}</td>"
+            f"<td>{_esc(plat)}</td>"
+            "</tr>"
+        )
+    if not prover_rows:
+        prover_rows.append('<tr><td colspan="5" class="muted">No Lean 4 prover checkpoints found.</td></tr>')
+
+    ls_gain = law_shift.get("recovery_gain")
+    ls_gain_str = f"{ls_gain * 100:+.1f}%" if isinstance(ls_gain, (int, float)) else "—"
+    mg_pins_str = ", ".join(f"{k}={v[:18]}…" if len(v) > 20 else f"{k}={v}" for k, v in (multigen.get("model_pins") or {}).items()) or "—"
 
     # Checkpoint per-law breakdown
     cp = snap.get("checkpoint")
@@ -218,6 +241,16 @@ def render_dashboard_html(snap: dict[str, Any]) -> str:
       <div class="kv"><span class="muted">Total analogy hints</span><span>{_esc(tr.get('total_hints', '—'))}</span></div>
       <div class="kv"><span class="muted">Mean analogy confidence</span><span>{_fmt_pct(tr.get('mean_confidence'))}</span></div>
     </div>
+
+    <div class="card">
+      <h2>Phase 3: Law-Shift &amp; Pinned Multi-Gen</h2>
+      <div class="kv"><span class="muted">Law-shift static post-acc</span><span>{_fmt_pct(law_shift.get('static_post_accuracy'))}</span></div>
+      <div class="kv"><span class="muted">Law-shift adapted post-acc</span><span>{_fmt_pct(law_shift.get('adapted_post_accuracy'))} ({_esc(ls_gain_str)})</span></div>
+      <div class="kv"><span class="muted">Surprise detection rate</span><span>{_fmt_pct(law_shift.get('surprise_detection_rate'))}</span></div>
+      <div class="kv"><span class="muted">Multi-gen progress</span><span>{_esc(multigen.get('end_generation', '—'))} / {_esc(multigen.get('target_generations', '—'))}</span></div>
+      <div class="kv"><span class="muted">Multi-gen approvals / vetoes</span><span>{_esc(multigen.get('approvals', '—'))} / {_esc(multigen.get('vetoes', '—'))}</span></div>
+      <div class="kv"><span class="muted">Pinned models</span><span><code>{_esc(mg_pins_str)}</code></span></div>
+    </div>
   </div>
 
   <div class="stack">
@@ -226,6 +259,14 @@ def render_dashboard_html(snap: dict[str, Any]) -> str:
       <table>
         <thead><tr><th>Model</th><th>Episodes</th><th>Accuracy</th><th>Errors</th><th>Mean Latency</th></tr></thead>
         <tbody>{''.join(bakeoff_rows)}</tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Lean 4 Prover Bake-off Leaderboard</h2>
+      <table>
+        <thead><tr><th>Prover</th><th>Toolchain</th><th>Proved</th><th>Pass Rate</th><th>Mean Latency</th></tr></thead>
+        <tbody>{''.join(prover_rows)}</tbody>
       </table>
     </div>
 

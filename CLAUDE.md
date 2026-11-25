@@ -46,48 +46,54 @@ says otherwise.
 ## Commands
 ```bash
 python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
-pytest -q                     # 238 tests (including live Lean 4 compilation + Phase 1 & 2 core)
-pytest -q -k redteam          # governor, gate, sandbox, core, transfer, ashby & prover red-team set
+pytest -q                     # 247+ tests (including live Lean 4 compilation + Phase 1, 2 & 3 suites)
+pytest -q -k redteam          # governor, gate, sandbox, core, transfer, ashby, prover, law-shift & multigen red-team set
 prometheus-governor --help
 prometheus-observatory --help
 prometheus-verify-worlds --help
 ```
 
-## Where things stand (`v0.3.0` — Phase 0 & Phase 1 live-verified on Colab, Phase 2 complete)
+## Where things stand (`v0.4.0` — Phase 0, 1 & 2 live-verified on Colab; Phase 3 complete)
 Done (code, tests, workstation deployment, and live Colab verification):
 - Audit log, variant bundles, governor (keys, signed approvals/heartbeats, file locking,
   rules, audit scoring, proxy-gain check, kill switch, CLI), and Colab-side gate with
   persistent Drive state (`INSTALL_ROOT` on local ext4 `/content/installed_harness`).
-- Live Colab Phase 0 & Phase 1 verification: `g1c` (gen 1) and `g2` (gen 2) approved &
-  installed through live Drive/workstation governor; forced restart recovery and governor-stop
-  halt verified; `qwen3-8b` raw baseline 63.94% pinned at `b968826d9c46dd6066d109eabc6255188de91218`;
-  live Phase 1 Colab run scored **99.69%** on 200 worlds (36.59 mean budget, 98% early-stop,
-  24 MDL assemblies consolidated).
+- Live Colab Phase 0, Phase 1 & Phase 2 verification (`run-001`): `g1c` (gen 1), `g2` (gen 2),
+  and **`g3b` (gen 3, `analogy_balanced`)** approved & installed through live Drive/workstation
+  governor (with `g3` veto `1.000 -> 0.998` verifying the safety loop live); forced restart
+  recovery and governor-stop halt verified; `qwen3-8b` raw baseline 63.94% pinned at
+  `b968826d9c46dd6066d109eabc6255188de91218`; live Phase 1+2 Colab runs scored **99.69%** on
+  200 worlds (35.91 mean budget, 98.7% early-stop, 24 MDL assemblies, 2,601 analogy hints).
 - Workstation deployment: `governor` user, `prometheus-governor.service` (network denied),
-  `rclone-sync.timer` / `rclone-sync.service` syncing with Google Drive.
+  `rclone-sync.timer` / `rclone-sync.service` syncing with Google Drive, and
+  `deploy/init-run-002.sh` bootstrap helper for pinned `run-002`.
   Confirm with Paul before any `sudo` step when updating deployed units/venv.
 - Hidden-Law Lab v0 + Lean 4 ground-truth statement & `decide` proof layer (`v4.34.1`
-  pinned in `lean/PrometheusLaws/`, 1,000 worlds verified in `lean/verified_1000_worlds.json`).
+  pinned in `lean/PrometheusLaws/`, 1,000 worlds verified in `lean/verified_1000_worlds.json`)
+  plus isolated Lean 4.9.0 prover project (`lean/PrometheusProver49/`).
 - Hardened subprocess sandbox (`python -I`, AST screen, import allowlist, audit hook,
   rlimits, dedicated result pipe).
 - **Phase 1 Cognitive Core (`src/prometheus/core/`):** immutable Markov blanket (`RestrictedWorld`,
   `EssentialBounds`), pure-Python `ExactBayesianBackend` (120 consistent law profiles, incremental
-  Friston EFE, forgetting factor), Good's MDL `AssemblyMemory`, strict immutable→mutable `harness/`
-  loader, and hybrid `CognitiveAgent`.
+  Friston EFE, forgetting factor + surprise-driven global belief decay), Good's MDL `AssemblyMemory`,
+  strict immutable→mutable `harness/` loader, and hybrid `CognitiveAgent`.
 - **Phase 2 Hofstadter Transfer & Ashby Ultrastability (`transfer.py`, `ashby.py`):**
-  symbol-agnostic `StructuralAnalogyTransfer` with discriminative probe suggestions and
-  Bayesian surprise-spike anti-dogmatism guard; `HomeostaticMonitor` guarding immutable
-  `EssentialBounds` with persistent `ashby_state.json`; `AshbyProposer` generating validated
-  candidate harness mutations, screening on dev seeds (strictly disjoint from `audit_seeds`),
-  evaluating `audit_seeds` read-only, and publishing `.ready` bundles for Governor approval.
-- Resumable Colab runtime notebook (`colab/prometheus_runtime.ipynb`) wired with Phase 2
-  transfer + monitor in Cell 4 and bounded Ashby self-improvement loop (`g3`) in Cell 4e.
-- Local read-only Observatory dashboard (`src/prometheus/observatory/`) with Phase 1 & Phase 2
-  telemetry cards (`memory`, `cognitive`, `transfer`, `ashby`) and JSON API.
+  symbol-agnostic `StructuralAnalogyTransfer` with tempered evidence-annealed priors, discriminative
+  probe suggestions, and Bayesian surprise-spike anti-dogmatism guard; `HomeostaticMonitor` guarding
+  immutable `EssentialBounds` with persistent `ashby_state.json`; dual-budget `AshbyProposer`.
+- **Phase 3 Law-Shift Recovery, Lean 4.9 Prover Bake-off & Pinned Multi-Gen (`law_shift.py`, `prover_runner.py`, `multigen.py`):**
+  - Mid-run `shift_laws()` stress benchmark (`run_law_shift_benchmark`) comparing static Gen-0 vs
+    Ashby-adapted `forgetting_adapt` (**52.1% → 100.0%** post-shift recovery on 6-world suite).
+  - Resumable Lean 4.9 `pass@k` prover bake-off (`ProverBakeoffRunner`, `lean_compat="4.9"`,
+    `lean/PrometheusProver49/`, strict anti-cheat & statement-tampering validation).
+  - Resumable pinned multi-generation self-improvement orchestrator (`MultiGenRunner`,
+    `build_pinned_baseline_bundle`, `deploy/init-run-002.sh`) enforcing 40-hex `model_pins`.
+- Resumable Colab runtime notebook (`colab/prometheus_runtime.ipynb`) wired with Phase 1, 2 & 3
+  cells (Cell 4d Lean 4.9 `pass@k`, Cell 4e Ashby `g3b`, Cell 4f Law-Shift, Cell 4g `run-002` Multi-Gen).
+- Local read-only Observatory dashboard (`src/prometheus/observatory/`) with Phase 1, 2 & 3
+  telemetry cards (`memory`, `cognitive`, `transfer`, `ashby`, `law_shift`, `prover_bakeoff`, `multigen`).
 
-Next (Phase 3):
-1. Run Phase 2 on Colab (Cell 4 + Cell 4e → Cell 6 `g3` approval/install) and verify Observatory
-   `Ashby Ultrastability & Analogy Transfer` telemetry.
-2. Phase 3 law-shift stress benchmarks (`shift_laws()` mid-run recovery), deferred prover
-   bake-off (`goedel-prover-v2-8b` + Lean 4.9 check), and multi-generation self-improvement runs
-   under pinned `model_pins` (`run-002`).
+Next (Live Colab GPU Execution of Phase 3):
+1. Run Cell 4f (Law-Shift Stress Benchmark) on Colab and inspect the Phase 3 card in Observatory.
+2. Run Cell 4b-setup (`goedel-prover-v2-8b`) + Cell 4d (Lean 4.9 `pass@4` prover bake-off) on Colab GPU.
+3. Bootstrap `run-002` on workstation (`deploy/init-run-002.sh`) and run Cell 4g (pinned multi-generation self-improvement).

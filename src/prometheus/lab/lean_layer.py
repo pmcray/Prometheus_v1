@@ -45,11 +45,24 @@ from .world import HiddenLawWorld
 _LEAN_BINARY: str | None = None
 
 
+PROVER_LEAN_TOOLCHAIN = "leanprover/lean4:v4.9.0"
+
+
 def _lean_project_dir() -> Path | None:
     """Locate ``lean/PrometheusLaws`` so elan honours its ``lean-toolchain`` pin."""
     here = Path(__file__).resolve()
     for parent in here.parents:
         candidate = parent / "lean" / "PrometheusLaws"
+        if (candidate / "lean-toolchain").is_file():
+            return candidate
+    return None
+
+
+def prover_lean_project_dir() -> Path | None:
+    """Locate the separate Lean 4.9 prover project (``lean/PrometheusProver49``)."""
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / "lean" / "PrometheusProver49"
         if (candidate / "lean-toolchain").is_file():
             return candidate
     return None
@@ -74,14 +87,19 @@ def _lean_bin() -> str:
     )
 
 
-def lean_version(timeout: int = 15) -> str:
-    """Return the active Lean version string inside ``lean/PrometheusLaws``."""
+def lean_version(
+    timeout: int = 15,
+    *,
+    project_dir: Path | str | None = None,
+) -> str:
+    """Return the active Lean version string inside *project_dir* (default: ``lean/PrometheusLaws``)."""
+    cwd = Path(project_dir) if project_dir is not None else _lean_project_dir()
     res = subprocess.run(
         [_lean_bin(), "--version"],
         capture_output=True,
         text=True,
         timeout=timeout,
-        cwd=_lean_project_dir(),
+        cwd=cwd,
     )
     return res.stdout.strip()
 
@@ -161,18 +179,26 @@ def _world_theorems(truth: dict[str, bool], *, include_proofs: bool = True) -> l
     return theorems
 
 
-def _world_defs(world: HiddenLawWorld) -> str:
+def _world_defs(world: HiddenLawWorld, *, lean_compat: str = "4.34") -> str:
     n = len(world.symbols)
     op = world._op   # noqa: SLF001  (governor/ground-truth use only)
     f = world._f     # noqa: SLF001
+    if lean_compat == "4.9":
+        op_expr = "(opTable[a.val]!)[b.val]!"
+        f_expr = "fTable[a.val]!"
+    elif lean_compat == "4.34":
+        op_expr = "(opTable[a]!)[b]!"
+        f_expr = "fTable[a]!"
+    else:
+        raise ValueError(f"unsupported lean_compat {lean_compat!r}; expected '4.34' or '4.9'")
     return textwrap.dedent(f"""\
         abbrev N := {n}
 
         private def opTable : Array (Array (Fin N)) := {_op_array(op, n)}
-        def op (a b : Fin N) : Fin N := (opTable[a]!)[b]!
+        def op (a b : Fin N) : Fin N := {op_expr}
 
         private def fTable : Array (Fin N) := {_f_array(f, n)}
-        def f (a : Fin N) : Fin N := fTable[a]!
+        def f (a : Fin N) : Fin N := {f_expr}
     """)
 
 
@@ -180,11 +206,18 @@ def _world_defs(world: HiddenLawWorld) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
-def world_lean_source(world: HiddenLawWorld, *, include_proofs: bool = True) -> str:
+def world_lean_source(
+    world: HiddenLawWorld,
+    *,
+    include_proofs: bool = True,
+    lean_compat: str = "4.34",
+) -> str:
     """Return a self-contained Lean 4 source string for *world*.
 
     The source contains one ``theorem`` per law (two when ``f_bijective``
     holds), each proved by ``decide`` when *include_proofs* is True.
+    Pass ``lean_compat="4.9"`` for Lean 4.9.0 / Goedel-Prover-V2 compatibility
+    (uses explicit ``.val`` indexing into ``Array``, valid on both 4.9 and 4.34).
     """
     n = len(world.symbols)
     truth = world.ground_truth()
@@ -199,7 +232,7 @@ def world_lean_source(world: HiddenLawWorld, *, include_proofs: bool = True) -> 
         -- No imports needed: Fin, Array, and `decide` are in Lean 4 core.
 
     """)
-    defs = _world_defs(world)
+    defs = _world_defs(world, lean_compat=lean_compat)
     theorems = _world_theorems(truth, include_proofs=include_proofs)
     return header + defs + "\n" + "\n".join(theorems) + "\n"
 
@@ -215,10 +248,15 @@ def batch_lean_source(worlds: Sequence[HiddenLawWorld]) -> str:
     return "\n".join(blocks)
 
 
-def verify_lean_source(source: str, timeout: int = 60) -> tuple[bool, str]:
-    """Check *source* by piping it to ``lean --stdin`` inside ``lean/PrometheusLaws``."""
+def verify_lean_source(
+    source: str,
+    timeout: int = 60,
+    *,
+    project_dir: Path | str | None = None,
+) -> tuple[bool, str]:
+    """Check *source* by piping it to ``lean --stdin`` inside *project_dir* (default: ``lean/PrometheusLaws``)."""
     lean = _lean_bin()
-    project_dir = _lean_project_dir()
+    cwd = Path(project_dir) if project_dir is not None else _lean_project_dir()
     try:
         result = subprocess.run(
             [lean, "--stdin"],
@@ -226,7 +264,7 @@ def verify_lean_source(source: str, timeout: int = 60) -> tuple[bool, str]:
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=project_dir,
+            cwd=cwd,
         )
     except subprocess.TimeoutExpired:
         return False, f"lean --stdin timed out after {timeout}s"
@@ -235,9 +273,19 @@ def verify_lean_source(source: str, timeout: int = 60) -> tuple[bool, str]:
     return True, ""
 
 
-def verify_world(world: HiddenLawWorld, timeout: int = 60) -> tuple[bool, str]:
+def verify_world(
+    world: HiddenLawWorld,
+    timeout: int = 60,
+    *,
+    lean_compat: str = "4.34",
+    project_dir: Path | str | None = None,
+) -> tuple[bool, str]:
     """Generate and verify the Lean source for *world* in one call."""
-    return verify_lean_source(world_lean_source(world), timeout=timeout)
+    return verify_lean_source(
+        world_lean_source(world, lean_compat=lean_compat),
+        timeout=timeout,
+        project_dir=project_dir,
+    )
 
 
 @dataclass(frozen=True)

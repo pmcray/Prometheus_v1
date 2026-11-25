@@ -164,6 +164,39 @@ def _collect_bakeoffs(dirs: list[Path]) -> list[dict[str, Any]]:
     return rows
 
 
+def _collect_prover_bakeoffs(dirs: list[Path]) -> list[dict[str, Any]]:
+    seen: dict[str, dict[str, Any]] = {}
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for p in sorted(d.glob("prover_*.json")):
+            data = _safe_read_json(p)
+            if not isinstance(data, dict) or "results" not in data:
+                continue
+            model = str(data.get("model_name") or p.stem.removeprefix("prover_"))
+            results = data.get("results") or {}
+            if not isinstance(results, dict):
+                continue
+            rows = [r for r in results.values() if isinstance(r, dict)]
+            n = len(rows)
+            n_proved = sum(1 for r in rows if r.get("proved"))
+            lats = [float(r["latency_s"]) for r in rows if r.get("latency_s") is not None]
+            seen[model] = {
+                "model_name": model,
+                "file": str(p),
+                "lean_toolchain": str(data.get("lean_toolchain") or "unknown"),
+                "lean_compat": str(data.get("lean_compat") or "4.34"),
+                "attempts_per_world": int(data.get("attempts_per_world") or 1),
+                "n_worlds": n,
+                "n_proved": n_proved,
+                "pass_rate": (n_proved / n) if n else None,
+                "mean_latency_s": (sum(lats) / len(lats)) if lats else None,
+            }
+    out = list(seen.values())
+    out.sort(key=lambda r: -(r["pass_rate"] if r["pass_rate"] is not None else -1.0))
+    return out
+
+
 def _collect_mlflow_runs(prometheus_dir: Path | None) -> list[dict[str, Any]]:
     if prometheus_dir is None:
         return []
@@ -415,6 +448,35 @@ def collect_snapshot(
             "last_proposal": ashby_proposals[-1] if ashby_proposals else None,
         }
 
+    # Phase 3 optional telemetry (law_shift_benchmark.json, prover_*.json, multigen_checkpoint.json)
+    ls_raw = _safe_read_json(ex / "law_shift_benchmark.json")
+    law_shift_summary: dict[str, Any] | None = None
+    if isinstance(ls_raw, dict) and isinstance(ls_raw.get("static"), dict) and isinstance(ls_raw.get("adapted"), dict):
+        law_shift_summary = {
+            "n_worlds": int(ls_raw.get("n_worlds", 0)),
+            "static_post_accuracy": ls_raw["static"].get("post_accuracy"),
+            "adapted_post_accuracy": ls_raw["adapted"].get("post_accuracy"),
+            "recovery_gain": ls_raw["adapted"].get("recovery_gain"),
+            "adapted_forgetting_factor": ls_raw["adapted"].get("forgetting_factor"),
+            "surprise_detection_rate": ls_raw["adapted"].get("surprise_detection_rate"),
+            "static_ashby_triggers": ls_raw["static"].get("ashby_triggers", 0),
+        }
+
+    mg_raw = _safe_read_json(ex / "multigen_checkpoint.json")
+    multigen_summary: dict[str, Any] | None = None
+    if isinstance(mg_raw, dict) and "records" in mg_raw:
+        multigen_summary = {
+            "run_id": mg_raw.get("run_id"),
+            "model_pins": dict(mg_raw.get("model_pins") or {}),
+            "start_generation": int(mg_raw.get("start_generation", 0)),
+            "end_generation": int(mg_raw.get("end_generation", 0)),
+            "target_generations": int(mg_raw.get("target_generations", 0)),
+            "approvals": int(mg_raw.get("approvals", 0)),
+            "vetoes": int(mg_raw.get("vetoes", 0)),
+            "timeouts": int(mg_raw.get("timeouts", 0)),
+            "rounds": len(mg_raw.get("records") or []),
+        }
+
     # Checkpoint progress (prefer Phase 2 / Phase 1 checkpoint if present)
     cp_raw = (
         _safe_read_json(ex / "phase2_checkpoint.json")
@@ -423,9 +485,10 @@ def collect_snapshot(
     )
     checkpoint = _summarise_checkpoint(cp_raw) if isinstance(cp_raw, dict) else None
 
-    # Bake-off leaderboard
+    # Bake-off leaderboards (cortex & Lean 4 prover)
     bakeoff_dirs = [d for d in (prom, ex) if d is not None]
     bakeoff = _collect_bakeoffs(bakeoff_dirs)
+    prover_bakeoff = _collect_prover_bakeoffs(bakeoff_dirs)
 
     # Optional MLflow SQLite runs
     mlflow_runs = _collect_mlflow_runs(prom)
@@ -466,9 +529,12 @@ def collect_snapshot(
         "logs": logs,
         "checkpoint": checkpoint,
         "bakeoff": bakeoff,
+        "prover_bakeoff": prover_bakeoff,
         "mlflow_runs": mlflow_runs,
         "memory": memory_summary,
         "cognitive": cognitive_summary,
         "transfer": transfer_summary,
         "ashby": ashby_summary,
+        "law_shift": law_shift_summary,
+        "multigen": multigen_summary,
     }
