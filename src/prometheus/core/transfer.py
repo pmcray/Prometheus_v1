@@ -45,9 +45,9 @@ class TransferParams:
     enabled: bool = True
     min_observations: int = 3
     min_confidence: float = 0.45
-    max_prior_blend: float = 0.55
+    max_prior_blend: float = 0.35
     temperature: float = 1.5
-    surprise_veto_threshold: float = 3.2
+    surprise_veto_threshold: float = 5.0
     enable_probe_suggestions: bool = True
     max_probe_steps: int = 6
 
@@ -398,6 +398,18 @@ class StructuralAnalogyTransfer:
                 confidence=0.0,
             )
 
+        # Transfer is for sparse-data bootstrapping: once substantial direct
+        # observations exist on the current world, gracefully release the prior
+        # back to uniform so mature observations dominate without circular bias.
+        horizon = self.params.min_observations + max(2 * self.params.max_probe_steps, 8)
+        if len(observations) > horizon:
+            return TransferHint(
+                prior_joint=UNIFORM_JOINT_PRIOR,
+                suggested_actions=(),
+                source_assembly_id=None,
+                confidence=0.0,
+            )
+
         valid_asms: list[Assembly] = [a for a in assemblies if isinstance(a, Assembly)]
         if not valid_asms:
             return None
@@ -424,7 +436,9 @@ class StructuralAnalogyTransfer:
         if confidence < self.params.min_confidence:
             return None
 
-        # Mixture prior across matched assemblies, softly blended with uniform
+        # Mixture prior across matched assemblies, square-root tempered and
+        # annealed as direct observations accumulate so a single sharp assembly
+        # cannot inject an extreme prior-odds spike over noisy early evidence.
         mix = [0.0] * NUM_VALID_PROFILES
         for a, w in zip(valid_asms, weights):
             if w < 1e-4:
@@ -433,9 +447,18 @@ class StructuralAnalogyTransfer:
             for idx in range(NUM_VALID_PROFILES):
                 mix[idx] += w * ap[idx]
 
-        alpha = min(max(self.params.max_prior_blend * confidence, 0.0), self.params.max_prior_blend)
+        tempered = [math.sqrt(max(p, 1e-6)) for p in mix]
+        ts = sum(tempered)
+        tempered = [p / ts for p in tempered]
+
+        excess_obs = max(0, len(observations) - self.params.min_observations)
+        anneal = max(0.0, 1.0 - excess_obs / max(float(horizon - self.params.min_observations + 1), 1.0))
+        alpha = min(
+            max(self.params.max_prior_blend * confidence * anneal, 0.0),
+            self.params.max_prior_blend,
+        )
         blended = tuple(
-            (1.0 - alpha) * UNIFORM_JOINT_PRIOR[i] + alpha * mix[i]
+            (1.0 - alpha) * UNIFORM_JOINT_PRIOR[i] + alpha * tempered[i]
             for i in range(NUM_VALID_PROFILES)
         )
         bs = sum(blended)

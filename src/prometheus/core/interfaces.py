@@ -82,7 +82,7 @@ class AshbyConfig:
     min_episodes_before_trigger: int = 4
     min_breach_episodes: int = 2
     cooldown_episodes: int = 6
-    surprise_spike_threshold: float = 3.5
+    surprise_spike_threshold: float = 5.2
 
 
 @runtime_checkable

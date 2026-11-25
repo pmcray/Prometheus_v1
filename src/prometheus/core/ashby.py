@@ -506,11 +506,11 @@ class AshbyProposer:
                 "precision_boost",
                 efe_n=dataclasses.replace(
                     efe,
-                    beta_law=_clamp(max(efe.beta_law * 1.4, 4.5), 0.5, 50.0),
-                    lambda_cost=_clamp(min(efe.lambda_cost * 0.65, 0.08), 0.01, 5.0),
-                    stop_entropy_bits=_clamp(min(efe.stop_entropy_bits * 0.6, 0.12), 0.04, 2.0),
-                    stop_eig_per_cost=_clamp(min(efe.stop_eig_per_cost * 0.35, 0.012), 0.002, 1.0),
-                    min_observations_before_stop=min(12, max(4, efe.min_observations_before_stop + 2)),
+                    beta_law=_clamp(max(efe.beta_law * 1.15, 4.5), 0.5, 50.0),
+                    lambda_cost=_clamp(min(efe.lambda_cost * 0.75, 0.08), 0.01, 5.0),
+                    stop_entropy_bits=_clamp(min(efe.stop_entropy_bits * 0.75, 0.12), 0.05, 2.0),
+                    stop_eig_per_cost=_clamp(min(efe.stop_eig_per_cost * 0.65, 0.012), 0.004, 1.0),
+                    min_observations_before_stop=min(12, max(4, efe.min_observations_before_stop + 1)),
                 ),
             )
 
@@ -519,18 +519,19 @@ class AshbyProposer:
                 "budget_efficiency",
                 efe_n=dataclasses.replace(
                     efe,
-                    lambda_cost=_clamp(efe.lambda_cost * 1.6, 0.02, 5.0),
-                    stop_entropy_bits=_clamp(efe.stop_entropy_bits * 1.35, 0.08, 0.6),
-                    stop_eig_per_cost=_clamp(efe.stop_eig_per_cost * 1.5, 0.005, 0.25),
+                    lambda_cost=_clamp(efe.lambda_cost * 1.15, 0.02, 5.0),
+                    stop_entropy_bits=_clamp(efe.stop_entropy_bits * 1.15, 0.08, 0.5),
+                    stop_eig_per_cost=_clamp(efe.stop_eig_per_cost * 1.2, 0.005, 0.20),
                 ),
                 mem_n=dataclasses.replace(
                     mem,
-                    prior_blend=_clamp(mem.prior_blend + 0.12, 0.1, 0.70),
+                    prior_blend=_clamp(mem.prior_blend + 0.08, 0.1, 0.55),
                 ),
                 tr_n=dataclasses.replace(
                     tr,
                     enabled=True,
-                    max_prior_blend=_clamp(tr.max_prior_blend + 0.10, 0.2, 0.75),
+                    enable_probe_suggestions=True,
+                    max_prior_blend=_clamp(tr.max_prior_blend + 0.05, 0.15, 0.40),
                 ),
             )
 
@@ -548,8 +549,8 @@ class AshbyProposer:
                 ),
                 tr_n=dataclasses.replace(
                     tr,
-                    surprise_veto_threshold=_clamp(min(tr.surprise_veto_threshold, 2.5), 1.5, 5.0),
-                    max_prior_blend=_clamp(tr.max_prior_blend * 0.6, 0.1, 0.5),
+                    surprise_veto_threshold=_clamp(min(tr.surprise_veto_threshold, 4.5), 2.5, 6.0),
+                    max_prior_blend=_clamp(tr.max_prior_blend * 0.6, 0.1, 0.4),
                 ),
             )
 
@@ -702,10 +703,7 @@ class AshbyProposer:
         if not candidates:
             raise RuntimeError("AshbyProposer generated zero valid candidate harnesses")
 
-        best_label: str = ""
-        best_files: dict[str, str] = {}
-        best_loaded: LoadedHarness | None = None
-        best_eval: CandidateEvaluation | None = None
+        ranked_candidates: list[tuple[tuple[float, int, float, float], str, dict[str, str], LoadedHarness, CandidateEvaluation]] = []
 
         for label, files in candidates:
             loaded = _validate_candidate_files(files)
@@ -722,23 +720,52 @@ class AshbyProposer:
                 rng_seed=rng_seed,
             )
             evaluations.append(ev)
-            if best_eval is None or (
+            score_key = (
                 ev.dev_accuracy,
                 -ev.bound_violations,
                 -ev.mean_budget_spent,
                 ev.proxy_score,
-            ) > (
-                best_eval.dev_accuracy,
-                -best_eval.bound_violations,
-                -best_eval.mean_budget_spent,
-                best_eval.proxy_score,
-            ):
-                best_label = label
-                best_files = files
-                best_loaded = loaded
-                best_eval = ev
+            )
+            ranked_candidates.append((score_key, label, files, loaded, ev))
 
-        assert best_loaded is not None and best_eval is not None
+        if not ranked_candidates:
+            raise RuntimeError("AshbyProposer produced zero valid candidate evaluations")
+
+        ranked_candidates.sort(key=lambda item: item[0], reverse=True)
+
+        # Dual-budget non-regression check on dev_seeds (strictly disjoint from audit_seeds):
+        # when screening at a tight stress budget (e.g. budget=25, audit_budget=500),
+        # verify the selected candidate does not regress at audit_budget on dev_seeds.
+        selected = ranked_candidates[0]
+        if audit_budget > budget + 1e-6 and len(ranked_candidates) > 1:
+            check_seeds = list(dev_seeds)[: min(8, len(dev_seeds))]
+            inc_full = self.evaluate_harness_on_dev(
+                "incumbent_full",
+                current_harness,
+                dev_seeds=check_seeds,
+                memory=memory,
+                noise=noise,
+                budget=audit_budget,
+                use_transfer=use_transfer,
+                rng_seed=rng_seed,
+            )
+            for item in ranked_candidates:
+                _key, _lbl, _files, cand_loaded, _ev = item
+                cand_full = self.evaluate_harness_on_dev(
+                    f"{_lbl}_full",
+                    cand_loaded,
+                    dev_seeds=check_seeds,
+                    memory=memory,
+                    noise=noise,
+                    budget=audit_budget,
+                    use_transfer=use_transfer,
+                    rng_seed=rng_seed,
+                )
+                if cand_full.dev_accuracy + 1e-9 >= inc_full.dev_accuracy:
+                    selected = item
+                    break
+
+        _, best_label, best_files, best_loaded, best_eval = selected
 
         # Evaluate frozen AUDIT_SEEDS strictly read-only (learn=False, no ground truth!)
         mem_ro = copy.deepcopy(memory)

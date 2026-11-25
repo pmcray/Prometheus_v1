@@ -514,3 +514,50 @@ def test_redteam_ashby_proxy_only_gain_still_vetoed_by_governor(tmp_path):
     assert len(decisions) == 1
     assert decisions[0]["body"]["decision"] == "veto"
     assert any("proxy-only gain" in r for r in decisions[0]["body"]["reasons"])
+
+
+def test_transfer_anneals_to_uniform_after_bootstrap_horizon():
+    """Transfer prior must smoothly fade back to uniform once direct observations accumulate."""
+    mem = AssemblyMemory()
+    trainer = CognitiveAgent(memory=mem, rng_seed=0)
+    for ep, s in enumerate(range(6)):
+        trainer.run_episode(HiddenLawWorld(seed=s, noise=0.05, budget=250.0), learn=True, episode_idx=ep)
+
+    params = TransferParams(min_observations=3, max_probe_steps=4, min_confidence=0.35)
+    transfer = StructuralAnalogyTransfer(params)
+    be = ExactBayesianBackend()
+    syms = ["ka", "lu", "mo", "ne"]
+    be.reset(syms, noise=0.05)
+
+    obs: list[Observation] = []
+    # Horizon is min_observations + max(2 * max_probe_steps, 8) = 11
+    for step in range(13):
+        a = syms[step % len(syms)]
+        act = ExperimentAction("combine", (a, a), 1.0)
+        surp = be.observe(act, a)
+        obs.append(Observation(step, act, a, surp))
+
+    hint = transfer.propose_transfer(be.belief(), obs, mem.assemblies)
+    assert hint is not None
+    assert hint.prior_joint == UNIFORM_JOINT_PRIOR
+    assert hint.suggested_actions == ()
+    assert hint.confidence == 0.0
+
+
+def test_homeostatic_monitor_ignores_normal_5pct_noise_surprise():
+    """A single 5% observation noise flip (~4.4 nats) must not false-trigger HIGH_SURPRISE."""
+    mon = HomeostaticMonitor(AshbyConfig(window_size=4, min_episodes_before_trigger=2, min_breach_episodes=2))
+    noisy_but_healthy = EssentialMetrics(
+        mean_confidence=0.998,
+        final_entropy_bits=0.05,
+        budget_spent=38.0,
+        budget_fraction=0.076,
+        observations_used=42,
+        mean_surprise=1.2,
+        max_surprise=4.4,
+        mdl_compression_bits=5.5,
+    )
+    for _ in range(5):
+        assert mon.record(noisy_but_healthy) is False
+    assert mon.trigger_count == 0
+    assert mon.status_summary()["status"] == "HOMEOSTATIC"
