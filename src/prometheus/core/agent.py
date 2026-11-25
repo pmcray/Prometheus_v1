@@ -63,6 +63,11 @@ class CognitiveEpisodeResult:
     latency_s: float = 0.0
     llm_notes: str | None = None
     error: str | None = None
+    transfer_hints: int = 0
+    transfer_source: str | None = None
+    transfer_confidence: float = 0.0
+    ashby_triggered: bool = False
+    ashby_violations: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return dataclasses.asdict(self)
@@ -225,6 +230,9 @@ class CognitiveAgent:
         observations: list[Observation] = []
         llm_calls = 0
         sandbox_errors = 0
+        transfer_hints = 0
+        transfer_source: str | None = None
+        transfer_confidence = 0.0
         llm_claims_hint: dict[str, bool] | None = None
         llm_notes: str | None = None
         stopped_early = False
@@ -250,6 +258,11 @@ class CognitiveAgent:
                 if hint is not None:
                     if hint.prior_joint is not None:
                         self.backend.set_prior(hint.prior_joint)
+                    if hint.source_assembly_id is not None and hint.confidence > 0.0:
+                        transfer_hints += 1
+                        if hint.confidence >= transfer_confidence:
+                            transfer_source = hint.source_assembly_id
+                            transfer_confidence = float(hint.confidence)
                     legal = {_action_key(s.action): s.action for s in scores}
                     for cand in hint.suggested_actions:
                         if _action_key(cand) in legal:
@@ -353,8 +366,11 @@ class CognitiveAgent:
             sandbox_errors=sandbox_errors,
         )
 
+        ashby_triggered = False
+        ashby_violations: list[str] = []
         if self.monitor is not None:
-            self.monitor.record(metrics)
+            ashby_triggered = bool(self.monitor.record(metrics))
+            ashby_violations = list(self.monitor.violations())
 
         latency_s = time.monotonic() - t0
         if self.event_log is not None:
@@ -377,6 +393,10 @@ class CognitiveAgent:
                     "stop_reason": stop_reason,
                     "llm_calls": llm_calls,
                     "sandbox_errors": sandbox_errors,
+                    "transfer_hints": transfer_hints,
+                    "transfer_source": transfer_source,
+                    "transfer_confidence": round(transfer_confidence, 4),
+                    "ashby_triggered": ashby_triggered,
                     "learn": learn,
                 },
             )
@@ -395,6 +415,11 @@ class CognitiveAgent:
             stop_reason=stop_reason,
             latency_s=latency_s,
             llm_notes=llm_notes,
+            transfer_hints=transfer_hints,
+            transfer_source=transfer_source,
+            transfer_confidence=round(transfer_confidence, 4),
+            ashby_triggered=ashby_triggered,
+            ashby_violations=ashby_violations,
         )
 
     def evaluate_audit_seeds(

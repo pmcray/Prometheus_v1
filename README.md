@@ -8,7 +8,7 @@ self-improvement loop kept under control by a governor the agent cannot modify.
 
 Design document: *Prometheus v1 Demonstrator: Design and Roadmap* (Claude Docs).
 
-## Status: Phase 1 Cognitive Core complete (`v0.2.0`); Phase 0 Colab round-trip & baseline verified
+## Status: Phase 2 Hofstadter Transfer & Ashby Ultrastability complete (`v0.3.0`); Phase 1 live-verified on Colab (`g2`, 99.69%)
 
 | Component | State | Where |
 | --- | --- | --- |
@@ -17,15 +17,16 @@ Design document: *Prometheus v1 Demonstrator: Design and Roadmap* (Claude Docs).
 | Governor: Ed25519 keys, signed approvals & heartbeats, file locking | Done, tested | `src/prometheus/governor/` |
 | Governor: fixed rules, audit scoring, proxy-gain check, kill switch | Done, tested | `governor/rules.py`, `governor/service.py` |
 | Governor CLI, systemd units, rclone two-way copy script | Done; deployed on workstation | `governor/cli.py`, `deploy/` |
-| Colab-side gate (heartbeat check, verified atomic install, persistent state) | Done, live Drive round-trip verified (`g1c`, gen 1) | `src/prometheus/runtime/gate.py` |
+| Colab-side gate (heartbeat check, verified atomic install, persistent state) | Done; live Drive round-trip verified (`g1c` gen 1, `g2` gen 2) | `src/prometheus/runtime/gate.py` |
 | Sandbox for agent-written code (AST + audit hook + rlimits + pipe IPC) | Done, tested | `src/prometheus/runtime/sandbox.py` |
 | Hidden-Law Lab world generator, 8 laws, law shift | Done, tested | `src/prometheus/lab/` |
 | Lean 4 ground-truth statement & `decide` proof layer | Done, **1,000 worlds verified** (`v4.34.1`) | `src/prometheus/lab/lean_layer.py`, `lean/verified_1000_worlds.json` |
-| Resumable Colab runtime notebook (Phase 0 + Phase 1) | Done, tested on Colab GPU | `colab/prometheus_runtime.ipynb` |
+| Resumable Colab runtime notebook (Phase 0 + Phase 1 + Phase 2 Ashby loop) | Done, tested on Colab GPU | `colab/prometheus_runtime.ipynb` |
 | Foundation-model & prover bake-off harness + runner | Done; `qwen3-8b` pinned (`b968826d…`) | `src/prometheus/harness/`, `src/prometheus/bakeoff/` |
-| Observatory dashboard (read-only web UI + JSON API + Phase 1 cards) | Done, tested | `src/prometheus/observatory/` |
-| Cognitive core (Markov blanket, Friston EFE, Good MDL memory, hybrid LLM advisor, harness loader) | Done, tested (**99.69%** on 200 worlds; **100.0%** on audit 1000–1049) | `src/prometheus/core/` |
-| Analogy transfer & Ashby ultrastability loop | Next (Phase 2+) | `src/prometheus/core/interfaces.py` (seams ready) |
+| Observatory dashboard (read-only web UI + JSON API + Phase 1/2 cards) | Done, tested | `src/prometheus/observatory/` |
+| Phase 1 Cognitive core (Markov blanket, Friston EFE, Good MDL memory, hybrid LLM advisor, harness loader) | Done, **live-verified on Colab** (**99.69%** on 200 worlds; **100.0%** on audit `1000–1049`; `g2` approved) | `src/prometheus/core/` |
+| Phase 2 Hofstadter structural analogy transfer & Ashby ultrastability proposer | Done, tested (symbol-invariant transfer, surprise veto, immutable bounds, bounded Governor proposal loop) | `src/prometheus/core/transfer.py`, `src/prometheus/core/ashby.py` |
+| Phase 3 Law-shift stress tests, prover bake-off (`Goedel-Prover-V2-8B`), and multi-generation runs | Next (Phase 3) | — |
 
 ### Phase 0 vs Phase 1 Benchmark (`seeds 0–199`, `noise=0.05`, `budget=500.0`)
 

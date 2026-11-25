@@ -1,11 +1,20 @@
-"""Prometheus v1 Phase 1 Cognitive Core (protected/immutable code).
+"""Prometheus v1 Phase 1 & 2 Cognitive Core (protected/immutable code).
 
 Implements the Markov blanket, Friston active-inference / EFE backend,
-Good's MDL assembly-style memory, strict immutable->mutable harness loader,
-hybrid multi-turn episode runner, and Phase 2/3 extension protocols.
+Good's MDL assembly-style memory, Hofstadter structural analogy transfer,
+Ashby ultrastability monitoring & bounded self-improvement proposer,
+strict immutable->mutable harness loader, and hybrid multi-turn episode runner.
 """
 
 from .agent import CognitiveAgent, CognitiveEpisodeResult
+from .ashby import (
+    AshbyConfig,
+    AshbyProposer,
+    CandidateEvaluation,
+    HomeostaticMonitor,
+    ProposalOutcome,
+    StressDiagnosis,
+)
 from .blanket import (
     DEFAULT_ESSENTIAL_BOUNDS,
     ActionScore,
@@ -46,13 +55,22 @@ from .memory import (
     MemoryParams,
     RecallResult,
 )
+from .transfer import (
+    StructuralAnalogyTransfer,
+    StructuralDescriptor,
+    TransferParams,
+    extract_descriptor,
+)
 
 __all__ = [
     "ALLOWED_SUBDIRS",
     "ActionScore",
     "AnalogyTransferAdapter",
+    "AshbyConfig",
+    "AshbyProposer",
     "Assembly",
     "AssemblyMemory",
+    "CandidateEvaluation",
     "CognitiveAgent",
     "CognitiveEpisodeResult",
     "ConsolidationReport",
@@ -63,6 +81,7 @@ __all__ = [
     "ExactBayesianBackend",
     "ExperimentAction",
     "HarnessValidationError",
+    "HomeostaticMonitor",
     "InferenceBackend",
     "LawBelief",
     "LoadedHarness",
@@ -70,13 +89,19 @@ __all__ = [
     "MeshConfig",
     "NUM_VALID_PROFILES",
     "Observation",
+    "ProposalOutcome",
     "RecallResult",
     "RestrictedWorld",
+    "StressDiagnosis",
+    "StructuralAnalogyTransfer",
+    "StructuralDescriptor",
     "TransferHint",
+    "TransferParams",
     "UNIFORM_JOINT_PRIOR",
     "UltrastabilityMonitor",
     "VALID_LAW_PROFILES",
     "WorldView",
+    "extract_descriptor",
     "load_harness",
     "run_harness_evaluator",
     "run_harness_tool",

@@ -74,6 +74,17 @@ class AnalogyTransferAdapter(Protocol):
     ) -> TransferHint | None: ...
 
 
+@dataclass(frozen=True)
+class AshbyConfig:
+    """Mutable cadence settings for Ashby monitoring (never weakens EssentialBounds)."""
+
+    window_size: int = 8
+    min_episodes_before_trigger: int = 4
+    min_breach_episodes: int = 2
+    cooldown_episodes: int = 6
+    surprise_spike_threshold: float = 3.5
+
+
 @runtime_checkable
 class UltrastabilityMonitor(Protocol):
     """Phase 2/3 seam for Ashby essential-variable monitoring."""

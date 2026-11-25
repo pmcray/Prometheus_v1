@@ -23,12 +23,14 @@ done
 # Pull Colab outputs -> workstation
 rclone copy "${REMOTE}/proposals" "${LOCAL}/proposals" --checksum
 rclone copy "${REMOTE}/logs"      "${LOCAL}/logs"      --checksum
-# Pull optional Phase 1 telemetry & checkpoints for local Observatory (never touches approvals/heartbeat)
+# Pull optional Phase 1/2 telemetry & checkpoints for local Observatory (never touches approvals/heartbeat)
 rclone copy "${REMOTE}" "${LOCAL}" --max-depth 1 \
     --include "checkpoint.json" \
     --include "audit_checkpoint.json" \
     --include "phase1_checkpoint.json" \
+    --include "phase2_checkpoint.json" \
     --include "memory_state.json" \
+    --include "ashby_state.json" \
     --checksum
 
 # Push governor outputs -> Drive

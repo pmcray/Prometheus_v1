@@ -46,6 +46,11 @@ def render_dashboard_html(snap: dict[str, Any]) -> str:
     pol = snap.get("policy") or {}
     cog = snap.get("cognitive") or {}
     mem = snap.get("memory") or {}
+    tr = snap.get("transfer") or {}
+    ashby = snap.get("ashby") or {}
+    ashby_status = ashby.get("status", "—")
+    ashby_cls = "ok" if ashby_status == "HOMEOSTATIC" else ("warn" if ashby_status == "STRESSED" else "muted")
+    ashby_reasons = ", ".join(ashby.get("active_reasons") or []) or "none"
 
     run_id = hb.get("run_id") or pol.get("run_id") or "—"
     gen_str = (
@@ -202,6 +207,16 @@ def render_dashboard_html(snap: dict[str, Any]) -> str:
       <div class="kv"><span class="muted">Early-stop rate</span><span>{_fmt_pct(cog.get('early_stop_rate'))}</span></div>
       <div class="kv"><span class="muted">Mean MDL gain (bits)</span><span>{_esc(cog.get('mean_mdl_gain_bits', '—'))}</span></div>
       <div class="kv"><span class="muted">Assemblies / consolidated</span><span>{_esc(mem.get('n_assemblies', '—'))} / {_esc(mem.get('episodes_consolidated', '—'))}</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Ashby Ultrastability &amp; Analogy Transfer</h2>
+      <div class="kv"><span class="muted">Homeostasis</span><span class="pill {ashby_cls}">{_esc(ashby_status)}</span></div>
+      <div class="kv"><span class="muted">Stress triggers / proposals</span><span>{_esc(ashby.get('trigger_count', '—'))} / {_esc(ashby.get('proposals_published', '—'))}</span></div>
+      <div class="kv"><span class="muted">Active stress channels</span><span>{_esc(ashby_reasons)}</span></div>
+      <div class="kv"><span class="muted">Analogy hint rate</span><span>{_fmt_pct(tr.get('hint_rate'))}</span></div>
+      <div class="kv"><span class="muted">Total analogy hints</span><span>{_esc(tr.get('total_hints', '—'))}</span></div>
+      <div class="kv"><span class="muted">Mean analogy confidence</span><span>{_fmt_pct(tr.get('mean_confidence'))}</span></div>
     </div>
   </div>
 

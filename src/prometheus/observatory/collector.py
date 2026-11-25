@@ -329,17 +329,27 @@ def collect_snapshot(
 
     logs_dir = ex / "logs"
     cognitive_records: list[dict[str, Any]] = []
+    ashby_triggers: list[dict[str, Any]] = []
+    ashby_proposals: list[dict[str, Any]] = []
     if logs_dir.is_dir():
         for p in sorted(logs_dir.glob("*.jsonl")):
             logs.append(_inspect_log(p, f"exchange/logs/{p.name}"))
             try:
                 for rec in read_log(p):
-                    if rec.get("kind") == "cognitive_episode" and isinstance(rec.get("payload"), dict):
-                        cognitive_records.append(rec["payload"])
+                    kind = rec.get("kind")
+                    pl = rec.get("payload")
+                    if not isinstance(pl, dict):
+                        continue
+                    if kind == "cognitive_episode":
+                        cognitive_records.append(pl)
+                    elif kind == "ashby_trigger":
+                        ashby_triggers.append(pl)
+                    elif kind == "ashby_proposal":
+                        ashby_proposals.append(pl)
             except (OSError, json.JSONDecodeError):
                 pass
 
-    # Phase 1 optional cognitive telemetry (memory_state.json + cognitive_episode logs)
+    # Phase 1/2 optional cognitive telemetry (memory_state.json + cognitive_episode logs)
     mem_raw = _safe_read_json(ex / "memory_state.json")
     memory_summary: dict[str, Any] | None = None
     if isinstance(mem_raw, dict) and isinstance(mem_raw.get("assemblies"), list):
@@ -352,6 +362,7 @@ def collect_snapshot(
         }
 
     cognitive_summary: dict[str, Any] | None = None
+    transfer_summary: dict[str, Any] | None = None
     if cognitive_records:
         n_cog = len(cognitive_records)
         cognitive_summary = {
@@ -369,9 +380,47 @@ def collect_snapshot(
                 sum(1 for r in cognitive_records if r.get("stopped_early")) / n_cog, 3
             ),
         }
+        hint_eps = [r for r in cognitive_records if int(r.get("transfer_hints", 0)) > 0]
+        if any("transfer_hints" in r for r in cognitive_records):
+            mean_conf = (
+                sum(float(r.get("transfer_confidence", 0.0)) for r in hint_eps) / len(hint_eps)
+                if hint_eps else 0.0
+            )
+            transfer_summary = {
+                "episodes_with_hints": len(hint_eps),
+                "hint_rate": round(len(hint_eps) / n_cog, 3),
+                "total_hints": sum(int(r.get("transfer_hints", 0)) for r in cognitive_records),
+                "mean_confidence": round(mean_conf, 3),
+            }
 
-    # Checkpoint progress
-    cp_raw = _safe_read_json(ex / "checkpoint.json")
+    # Phase 2 optional Ashby ultrastability telemetry (ashby_state.json + ashby_* logs)
+    ashby_raw = _safe_read_json(ex / "ashby_state.json")
+    ashby_summary: dict[str, Any] | None = None
+    if isinstance(ashby_raw, dict) or ashby_triggers or ashby_proposals:
+        st_sum = ashby_raw.get("summary") if isinstance(ashby_raw, dict) else None
+        if not isinstance(st_sum, dict):
+            st_sum = {}
+        ashby_summary = {
+            "status": str(st_sum.get("status") or ("STRESSED" if ashby_triggers else "HOMEOSTATIC")),
+            "total_episodes": int(
+                st_sum.get("total_episodes", ashby_raw.get("total_episodes", 0) if isinstance(ashby_raw, dict) else 0)
+            ),
+            "trigger_count": max(
+                int(st_sum.get("trigger_count", 0)),
+                len(ashby_triggers),
+            ),
+            "proposals_published": len(ashby_proposals),
+            "active_reasons": list(st_sum.get("active_reasons") or []),
+            "rolling_metrics": dict(st_sum.get("rolling_metrics") or {}),
+            "last_proposal": ashby_proposals[-1] if ashby_proposals else None,
+        }
+
+    # Checkpoint progress (prefer Phase 2 / Phase 1 checkpoint if present)
+    cp_raw = (
+        _safe_read_json(ex / "phase2_checkpoint.json")
+        or _safe_read_json(ex / "phase1_checkpoint.json")
+        or _safe_read_json(ex / "checkpoint.json")
+    )
     checkpoint = _summarise_checkpoint(cp_raw) if isinstance(cp_raw, dict) else None
 
     # Bake-off leaderboard
@@ -420,4 +469,6 @@ def collect_snapshot(
         "mlflow_runs": mlflow_runs,
         "memory": memory_summary,
         "cognitive": cognitive_summary,
+        "transfer": transfer_summary,
+        "ashby": ashby_summary,
     }

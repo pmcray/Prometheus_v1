@@ -27,7 +27,9 @@ from typing import Any
 from ..common.variant import BundleError, safe_relpath
 from ..runtime.sandbox import SandboxResult, SandboxViolation, run as sandbox_run
 from .inference import EFEParams
+from .interfaces import AshbyConfig
 from .memory import MemoryParams
+from .transfer import TransferParams
 
 ALLOWED_SUBDIRS: tuple[str, ...] = (
     "prompts",
@@ -63,7 +65,9 @@ class LoadedHarness:
 
     efe_params: EFEParams = EFEParams()
     memory_params: MemoryParams = MemoryParams()
+    transfer_params: TransferParams = TransferParams()
     mesh: MeshConfig = MeshConfig()
+    ashby_config: AshbyConfig = AshbyConfig()
     prompts: dict[str, str] = None  # type: ignore[assignment]
     tool_source: str | None = None
     evaluator_source: str | None = None
@@ -193,6 +197,58 @@ def _validate_mesh_config(data: dict[str, Any]) -> MeshConfig:
     )
 
 
+def _validate_transfer_params(data: dict[str, Any]) -> TransferParams:
+    d = TransferParams()
+    return TransferParams(
+        enabled=_check_bool(data, "enabled", d.enabled),
+        min_observations=_check_int(data, "min_observations", d.min_observations, lo=1, hi=50),
+        min_confidence=_check_float(data, "min_confidence", d.min_confidence, lo=0.05, hi=0.99),
+        max_prior_blend=_check_float(data, "max_prior_blend", d.max_prior_blend, lo=0.0, hi=0.85),
+        temperature=_check_float(data, "temperature", d.temperature, lo=0.1, hi=25.0),
+        surprise_veto_threshold=_check_float(
+            data, "surprise_veto_threshold", d.surprise_veto_threshold, lo=1.0, hi=20.0
+        ),
+        enable_probe_suggestions=_check_bool(
+            data, "enable_probe_suggestions", d.enable_probe_suggestions
+        ),
+        max_probe_steps=_check_int(data, "max_probe_steps", d.max_probe_steps, lo=0, hi=40),
+    )
+
+
+_FORBIDDEN_ASHBY_KEYS = frozenset({
+    "essential_bounds",
+    "bounds",
+    "min_confidence",
+    "max_budget_fraction",
+    "max_rolling_surprise",
+    "max_sandbox_error_rate",
+})
+
+
+def _validate_ashby_config(data: dict[str, Any]) -> AshbyConfig:
+    forbidden = sorted(k for k in data if k in _FORBIDDEN_ASHBY_KEYS)
+    if forbidden:
+        raise HarnessValidationError(
+            f"mutable harness cannot modify protected essential-variable bounds: {forbidden}"
+        )
+    d = AshbyConfig()
+    return AshbyConfig(
+        window_size=_check_int(data, "window_size", d.window_size, lo=2, hi=50),
+        min_episodes_before_trigger=_check_int(
+            data, "min_episodes_before_trigger", d.min_episodes_before_trigger, lo=2, hi=50
+        ),
+        min_breach_episodes=_check_int(
+            data, "min_breach_episodes", d.min_breach_episodes, lo=1, hi=20
+        ),
+        cooldown_episodes=_check_int(
+            data, "cooldown_episodes", d.cooldown_episodes, lo=1, hi=100
+        ),
+        surprise_spike_threshold=_check_float(
+            data, "surprise_spike_threshold", d.surprise_spike_threshold, lo=1.5, hi=20.0
+        ),
+    )
+
+
 # ----- safe file reading & loader -------------------------------------------
 
 def _read_safe_file(root: Path, rel: str) -> str:
@@ -275,11 +331,25 @@ def load_harness(harness_dir: Path | str | None = None) -> LoadedHarness:
         )
         loaded.append("memory_params/memory_params.json")
 
+    transfer_params = TransferParams()
+    tr_path = root / "memory_params" / "transfer_params.json"
+    if tr_path.exists() or tr_path.is_symlink():
+        transfer_params = _validate_transfer_params(
+            _read_json_artifact(root, "memory_params/transfer_params.json")
+        )
+        loaded.append("memory_params/transfer_params.json")
+
     mesh = MeshConfig()
     mesh_path = root / "mesh" / "config.json"
     if mesh_path.exists() or mesh_path.is_symlink():
         mesh = _validate_mesh_config(_read_json_artifact(root, "mesh/config.json"))
         loaded.append("mesh/config.json")
+
+    ashby_config = AshbyConfig()
+    ashby_path = root / "mesh" / "ashby_params.json"
+    if ashby_path.exists() or ashby_path.is_symlink():
+        ashby_config = _validate_ashby_config(_read_json_artifact(root, "mesh/ashby_params.json"))
+        loaded.append("mesh/ashby_params.json")
 
     prompts: dict[str, str] = {}
     prompts_dir = root / "prompts"
@@ -306,7 +376,9 @@ def load_harness(harness_dir: Path | str | None = None) -> LoadedHarness:
     return LoadedHarness(
         efe_params=efe_params,
         memory_params=memory_params,
+        transfer_params=transfer_params,
         mesh=mesh,
+        ashby_config=ashby_config,
         prompts=prompts,
         tool_source=tool_source,
         evaluator_source=evaluator_source,

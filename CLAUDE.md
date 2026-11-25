@@ -46,21 +46,23 @@ says otherwise.
 ## Commands
 ```bash
 python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
-pytest -q                     # 228 tests (including live Lean 4 compilation + Phase 1 core)
-pytest -q -k redteam          # governor, gate, sandbox, core & prover red-team set
+pytest -q                     # 238 tests (including live Lean 4 compilation + Phase 1 & 2 core)
+pytest -q -k redteam          # governor, gate, sandbox, core, transfer, ashby & prover red-team set
 prometheus-governor --help
 prometheus-observatory --help
 prometheus-verify-worlds --help
 ```
 
-## Where things stand (`v0.2.0` — Phase 0 live-verified, Phase 1 Cognitive Core complete)
-Done (code, tests, workstation deployment, and live Colab Phase 0 verification):
+## Where things stand (`v0.3.0` — Phase 0 & Phase 1 live-verified on Colab, Phase 2 complete)
+Done (code, tests, workstation deployment, and live Colab verification):
 - Audit log, variant bundles, governor (keys, signed approvals/heartbeats, file locking,
   rules, audit scoring, proxy-gain check, kill switch, CLI), and Colab-side gate with
   persistent Drive state (`INSTALL_ROOT` on local ext4 `/content/installed_harness`).
-- Live Colab Phase 0 verification: `g1c` signed approval & install round-trip (`generation=1`),
-  forced runtime restart recovery, governor-stop halt check, and 200-episode `qwen3-8b` baseline
-  (63.94% raw LLM accuracy; pinned at `b968826d9c46dd6066d109eabc6255188de91218` in `models.py`).
+- Live Colab Phase 0 & Phase 1 verification: `g1c` (gen 1) and `g2` (gen 2) approved &
+  installed through live Drive/workstation governor; forced restart recovery and governor-stop
+  halt verified; `qwen3-8b` raw baseline 63.94% pinned at `b968826d9c46dd6066d109eabc6255188de91218`;
+  live Phase 1 Colab run scored **99.69%** on 200 worlds (36.59 mean budget, 98% early-stop,
+  24 MDL assemblies consolidated).
 - Workstation deployment: `governor` user, `prometheus-governor.service` (network denied),
   `rclone-sync.timer` / `rclone-sync.service` syncing with Google Drive.
   Confirm with Paul before any `sudo` step when updating deployed units/venv.
@@ -70,20 +72,22 @@ Done (code, tests, workstation deployment, and live Colab Phase 0 verification):
   rlimits, dedicated result pipe).
 - **Phase 1 Cognitive Core (`src/prometheus/core/`):** immutable Markov blanket (`RestrictedWorld`,
   `EssentialBounds`), pure-Python `ExactBayesianBackend` (120 consistent law profiles, incremental
-  Friston EFE, forgetting factor), Good's MDL `AssemblyMemory` (probabilistic prior regeneration,
-  atomic Drive checkpointing), strict immutable→mutable `harness/` loader, and hybrid
-  `CognitiveAgent` (99.69% accuracy on seeds 0–199 with 36.59 mean budget; 100.0% on frozen audit
-  seeds 1000–1049 in read-only memory mode; 5.130 bits mean MDL gain).
-- Resumable Colab runtime notebook (`colab/prometheus_runtime.ipynb`) wired for Phase 1
-  `CognitiveAgent`, hybrid Qwen3-8B advisor, Phase 1 audit evaluation, and `g2` proposal.
-- Local read-only Observatory dashboard (`src/prometheus/observatory/`) with Phase 1 memory &
-  cognitive telemetry cards and JSON API.
+  Friston EFE, forgetting factor), Good's MDL `AssemblyMemory`, strict immutable→mutable `harness/`
+  loader, and hybrid `CognitiveAgent`.
+- **Phase 2 Hofstadter Transfer & Ashby Ultrastability (`transfer.py`, `ashby.py`):**
+  symbol-agnostic `StructuralAnalogyTransfer` with discriminative probe suggestions and
+  Bayesian surprise-spike anti-dogmatism guard; `HomeostaticMonitor` guarding immutable
+  `EssentialBounds` with persistent `ashby_state.json`; `AshbyProposer` generating validated
+  candidate harness mutations, screening on dev seeds (strictly disjoint from `audit_seeds`),
+  evaluating `audit_seeds` read-only, and publishing `.ready` bundles for Governor approval.
+- Resumable Colab runtime notebook (`colab/prometheus_runtime.ipynb`) wired with Phase 2
+  transfer + monitor in Cell 4 and bounded Ashby self-improvement loop (`g3`) in Cell 4e.
+- Local read-only Observatory dashboard (`src/prometheus/observatory/`) with Phase 1 & Phase 2
+  telemetry cards (`memory`, `cognitive`, `transfer`, `ashby`) and JSON API.
 
-Optional follow-ups / Next (Phase 2+):
-1. Run Phase 1 `CognitiveAgent` (Cell 4 → Cell 4c → Cell 5 → Cell 6 `g2`) on Colab and verify
-   `g2` approval (`~1.000` audit score) + Observatory cognitive telemetry.
-2. Optional deferred prover bake-off: run `goedel-prover-v2-8b` in Cell 4d (and align Lean 4.9 if
-   selected), plus pin `model_pins` in workstation `policy.json` when starting `run-002`.
-3. Phase 2+: Hofstadter structural analogy / cross-world transfer (`AnalogyTransferAdapter`),
-   Ashby ultrastability monitor (`UltrastabilityMonitor`) driving bounded harness-mutation
-   proposals, and law-shift adaptation benchmarks.
+Next (Phase 3):
+1. Run Phase 2 on Colab (Cell 4 + Cell 4e → Cell 6 `g3` approval/install) and verify Observatory
+   `Ashby Ultrastability & Analogy Transfer` telemetry.
+2. Phase 3 law-shift stress benchmarks (`shift_laws()` mid-run recovery), deferred prover
+   bake-off (`goedel-prover-v2-8b` + Lean 4.9 check), and multi-generation self-improvement runs
+   under pinned `model_pins` (`run-002`).
