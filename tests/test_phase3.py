@@ -133,9 +133,12 @@ def test_phase3_lean_49_compat_source_compiles_and_project_isolated():
     src49 = world_lean_source(w, include_proofs=True, lean_compat="4.9")
     assert "(opTable[a.val]!)[b.val]!" in src49
     assert "fTable[a.val]!" in src49
-    # Lean 4.9 explicit `.val` indexing is also valid Lean 4.34, so local verification compiles it
-    ok, err = verify_lean_source(src49, timeout=60)
-    assert ok, err
+    assert "decideExistsFin" in src49
+    # Verify on BOTH Lean 4.9.0 (PrometheusProver49) and Lean 4.34.1 (PrometheusLaws)
+    ok_49, err_49 = verify_lean_source(src49, timeout=60, project_dir=p49)
+    assert ok_49, err_49
+    ok_34, err_34 = verify_lean_source(src49, timeout=60)
+    assert ok_34, err_34
 
 
 class _StubProverClient:

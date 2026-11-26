@@ -179,6 +179,26 @@ def _world_theorems(truth: dict[str, bool], *, include_proofs: bool = True) -> l
     return theorems
 
 
+_LEAN49_EXISTS_FIN = """\
+private def decideExistsFin {n : Nat} (p : Fin n → Prop) [DecidablePred p] : (k : Nat) → k ≤ n → Decidable (∃ i : Fin n, i.val < k ∧ p i)
+  | 0, _ => isFalse (fun ⟨i, hi, _⟩ => Nat.not_lt_zero i.val hi)
+  | k + 1, hk =>
+    match decideExistsFin p k (Nat.le_of_lt hk) with
+    | isTrue h => isTrue (let ⟨i, hi, hp⟩ := h; ⟨i, Nat.lt_succ_of_lt hi, hp⟩)
+    | isFalse hlt =>
+      if hp : p ⟨k, hk⟩ then isTrue ⟨⟨k, hk⟩, Nat.lt_succ_self k, hp⟩
+      else isFalse (fun ⟨i, hi, hpi⟩ =>
+        match Nat.lt_or_eq_of_le (Nat.le_of_lt_succ hi) with
+        | Or.inl h => hlt ⟨i, h, hpi⟩
+        | Or.inr heq => hp (by cases i; subst heq; exact hpi))
+
+private instance {n : Nat} {p : Fin n → Prop} [DecidablePred p] : Decidable (∃ i : Fin n, p i) :=
+  match decideExistsFin p n (Nat.le_refl n) with
+  | isTrue h => isTrue (let ⟨i, _, hp⟩ := h; ⟨i, hp⟩)
+  | isFalse h => isFalse (fun ⟨i, hp⟩ => h ⟨i, i.isLt, hp⟩)
+"""
+
+
 def _world_defs(world: HiddenLawWorld, *, lean_compat: str = "4.34") -> str:
     n = len(world.symbols)
     op = world._op   # noqa: SLF001  (governor/ground-truth use only)
@@ -186,9 +206,11 @@ def _world_defs(world: HiddenLawWorld, *, lean_compat: str = "4.34") -> str:
     if lean_compat == "4.9":
         op_expr = "(opTable[a.val]!)[b.val]!"
         f_expr = "fTable[a.val]!"
+        extra = "\n" + _LEAN49_EXISTS_FIN
     elif lean_compat == "4.34":
         op_expr = "(opTable[a]!)[b]!"
         f_expr = "fTable[a]!"
+        extra = ""
     else:
         raise ValueError(f"unsupported lean_compat {lean_compat!r}; expected '4.34' or '4.9'")
     return textwrap.dedent(f"""\
@@ -199,7 +221,7 @@ def _world_defs(world: HiddenLawWorld, *, lean_compat: str = "4.34") -> str:
 
         private def fTable : Array (Fin N) := {_f_array(f, n)}
         def f (a : Fin N) : Fin N := {f_expr}
-    """)
+    """) + extra
 
 
 # ---------------------------------------------------------------------------
